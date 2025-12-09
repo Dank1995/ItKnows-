@@ -19,8 +19,5 @@ workflows:
 
     publishing:
       app_store_connect:
-        # Uses Codemagic Apple Developer Portal integration
         auth: integration
         submit_to_testflight: true
-        testflight:
-          distribute_external: false
