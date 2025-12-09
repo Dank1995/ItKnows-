@@ -1,26 +1,22 @@
+# Uncomment this to define a global platform for your project
 platform :ios, '13.0'
 
-# CocoaPods analytics
-ENV['COCOAPODS_DISABLE_STATS'] = 'true'
-
-project 'Runner', {
-  'Debug' => :debug,
-  'Profile' => :release,
-  'Release' => :release,
-}
-
-flutter_root = File.expand_path('../..', __FILE__)
-load File.join(flutter_root, 'packages', 'flutter_tools', 'bin', 'podhelper.rb')
+# Path to the Flutter SDK
+flutter_root = File.expand_path(File.join(__dir__, '..', '..'))
+require File.expand_path(File.join(flutter_root, 'packages', 'flutter_tools', 'bin', 'podhelper.rb'))
 
 target 'Runner' do
   use_frameworks!
   use_modular_headers!
 
+  flutter_ios_podfile_setup
+
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 end
 
+# Ensure all pods are built using modern standards
 post_install do |installer|
-  installer.pods_project.build_configurations.each do |config|
-    config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+  installer.pods_project.targets.each do |target|
+    flutter_additional_ios_build_settings(target)
   end
 end
