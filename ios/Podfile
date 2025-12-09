@@ -1,18 +1,14 @@
 platform :ios, '13.0'
 
-# DO NOT REMOVE — required for Flutter
+install! 'cocoapods', :deterministic_uuids => false
+
 flutter_root = File.expand_path('..', File.dirname(__FILE__))
 require File.expand_path(File.join(flutter_root, '.ios', 'Flutter', 'podhelper.rb'))
 
 target 'Runner' do
-  use_frameworks!
-  use_modular_headers!
-
   flutter_install_all_ios_pods(File.dirname(File.realpath(__FILE__)))
 end
 
 post_install do |installer|
-  installer.pods_project.targets.each do |target|
-    flutter_additional_ios_build_settings(target)
-  end
+  flutter_additional_ios_build_settings(installer)
 end
