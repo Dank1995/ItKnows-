@@ -14,12 +14,12 @@ workflows:
       - name: Install Flutter packages
         script: flutter pub get
 
-      - name: Build iOS release (no codesign)
-        script: flutter build ios --release --no-codesign
+      - name: Build iOS release
+        script: flutter build ios --release
 
     artifacts:
       - build/ios/ipa/*.ipa
-      - build/ios/iphoneos/*.app
+      - build/ios/archive/*.xcarchive
 
     publishing:
       app_store_connect:
