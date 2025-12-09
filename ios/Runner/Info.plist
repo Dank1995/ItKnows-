@@ -18,16 +18,16 @@
     <key>CFBundleShortVersionString</key>
     <string>1.0.0</string>
 
-    <!-- Build number — injected by Codemagic from pubspec.yaml -->
+    <!-- Build number — Codemagic injects FLUTTER_BUILD_NUMBER -->
     <key>CFBundleVersion</key>
     <string>$(FLUTTER_BUILD_NUMBER)</string>
 
-    <!-- Required for TestFlight approval (90683) -->
+    <!-- REQUIRED for TestFlight (error 90683) -->
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>ItKnows uses Bluetooth to connect to heart rate sensors during exercise.</string>
+    <string>ItKnows uses Bluetooth to connect to sensors during exercise.</string>
 
     <key>NSBluetoothPeripheralUsageDescription</key>
-    <string>Bluetooth access is needed to read your heart rate in real time during workouts.</string>
+    <string>Bluetooth access is required to read your physiological sensor data in real time.</string>
 
     <!-- Background Bluetooth support -->
     <key>UIBackgroundModes</key>
@@ -47,7 +47,7 @@
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
 
-    <!-- Encryption declaration -->
+    <!-- Encryption -->
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
 

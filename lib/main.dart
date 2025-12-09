@@ -264,8 +264,7 @@ class OptimiserState extends ChangeNotifier {
   }
 
   /// Public getters
-  String get rhythmAdvice =>
-      recording ? _advice : "Tap ▶ to start workout";
+  String get rhythmAdvice => recording ? _advice : "Tap ▶ to start workout";
 
   Color get rhythmColor {
     if (!recording) return Colors.grey;
@@ -276,15 +275,14 @@ class OptimiserState extends ChangeNotifier {
 }
 
 /// =============================================================
-/// BLE MANAGER
+/// BLE MANAGER (flutter_reactive_ble)
 /// =============================================================
 class BleManager extends ChangeNotifier {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
 
-  final Uuid hrService =
-      Uuid.parse("0000180D-0000-1000-8000-00805F9B34FB");
-  final Uuid hrMeasurement =
-      Uuid.parse("00002A37-0000-1000-8000-00805F9B34FB");
+  // Standard Heart Rate Service + Measurement characteristic
+  final Uuid hrService = Uuid.parse("0000180D-0000-1000-8000-00805F9B34FB");
+  final Uuid hrMeasurement = Uuid.parse("00002A37-0000-1000-8000-00805F9B34FB");
 
   StreamSubscription<DiscoveredDevice>? _scanSub;
   StreamSubscription<ConnectionStateUpdate>? _connSub;
@@ -300,8 +298,9 @@ class BleManager extends ChangeNotifier {
     await Permission.locationWhenInUse.request();
   }
 
-  Future<List<DiscoveredDevice>> scanDevices(
-      {Duration timeout = const Duration(seconds: 5)}) async {
+  Future<List<DiscoveredDevice>> scanDevices({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
     await ensurePermissions();
 
     final List<DiscoveredDevice> devices = [];
@@ -310,7 +309,11 @@ class BleManager extends ChangeNotifier {
 
     final completer = Completer<List<DiscoveredDevice>>();
 
-    _scanSub = _ble.scanForDevices(withServices: []).listen((d) {
+    _scanSub = _ble
+        .scanForDevices(
+          withServices: [], // all devices; HR straps usually still show
+        )
+        .listen((d) {
       if (!devices.any((x) => x.id == d.id)) {
         devices.add(d);
         notifyListeners();
@@ -342,8 +345,7 @@ class BleManager extends ChangeNotifier {
     }
   }
 
-  Future<void> connect(
-      String id, String name, OptimiserState opt) async {
+  Future<void> connect(String id, String name, OptimiserState opt) async {
     _connSub?.cancel();
     _hrSub?.cancel();
 
@@ -363,8 +365,7 @@ class BleManager extends ChangeNotifier {
           final bpm = _parseHr(data);
           if (bpm > 0) opt.setHr(bpm.toDouble());
         });
-      } else if (event.connectionState ==
-          DeviceConnectionState.disconnected) {
+      } else if (event.connectionState == DeviceConnectionState.disconnected) {
         connectedId = null;
         connectedName = null;
         notifyListeners();
