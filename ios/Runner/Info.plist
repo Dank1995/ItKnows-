@@ -3,29 +3,33 @@
 <plist version="1.0">
 <dict>
 
+    <!-- App display name -->
     <key>CFBundleName</key>
     <string>ItKnows</string>
 
     <key>CFBundleDisplayName</key>
     <string>ItKnows</string>
 
+    <!-- Bundle ID -->
     <key>CFBundleIdentifier</key>
     <string>com.dk.itknows</string>
 
+    <!-- Marketing version -->
     <key>CFBundleShortVersionString</key>
     <string>1.0.0</string>
 
+    <!-- Build number — injected by Codemagic from pubspec.yaml -->
     <key>CFBundleVersion</key>
-    <string>106</string>
+    <string>$(FLUTTER_BUILD_NUMBER)</string>
 
-    <!-- REQUIRED by Apple (fixes 90683) -->
+    <!-- Required for TestFlight approval (90683) -->
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>ItKnows uses Bluetooth to connect to heart rate monitors during workouts.</string>
+    <string>ItKnows uses Bluetooth to connect to heart rate sensors during exercise.</string>
 
     <key>NSBluetoothPeripheralUsageDescription</key>
-    <string>Bluetooth access is required to read your heart rate during exercise.</string>
+    <string>Bluetooth access is needed to read your heart rate in real time during workouts.</string>
 
-    <!-- Background Bluetooth usage -->
+    <!-- Background Bluetooth support -->
     <key>UIBackgroundModes</key>
     <array>
         <string>bluetooth-central</string>
@@ -43,6 +47,7 @@
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
 
+    <!-- Encryption declaration -->
     <key>ITSAppUsesNonExemptEncryption</key>
     <false/>
 
