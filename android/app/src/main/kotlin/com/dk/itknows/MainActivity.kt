@@ -1,4 +1,4 @@
-package com.example.itknows
+package com.dk.itknows
 
 import io.flutter.embedding.android.FlutterActivity
 
