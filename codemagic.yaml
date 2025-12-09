@@ -2,6 +2,10 @@ workflows:
   ios_release:
     name: "iOS Release Build"
     max_build_duration: 60
+
+    integrations:
+      app_store_connect: integration
+
     environment:
       flutter: stable
       xcode: latest
