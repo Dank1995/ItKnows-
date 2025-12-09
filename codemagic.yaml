@@ -1,0 +1,33 @@
+workflows:
+  ios_release:
+    name: iOS Release (Codemagic YAML)
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+    scripts:
+      - name: Get Flutter packages
+        script: |
+          flutter pub get
+
+      - name: Build iOS (no codesign)
+        script: |
+          flutter build ios --release --no-codesign
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - build/ios/iphoneos/*.app
+
+    ios_signing:
+      # This tells Codemagic to use the Apple Developer integration you already connected
+      xcode_project: "ios/Runner.xcworkspace"
+      scheme: "Runner"
+      bundle_id: "com.dk.itknows"
+      automatic_code_signing: true
+
+    app_store_connect:
+      # Uses the Apple API key you already added under Developer Portal
+      api_key: $APP_STORE_API_KEY
+      key_id: $APP_STORE_KEY_ID
+      issuer_id: $APP_STORE_ISSUER_ID
+      submit_to_testflight: true
