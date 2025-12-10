@@ -1,80 +1,16 @@
-// ---------------------------------------------------------------
-// Physiological Optimiser — with Notification Cues Only
-// ---------------------------------------------------------------
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:vibration/vibration.dart';
 
-// =============================================================
-// NOTIFICATION SERVICE
-// =============================================================
-class Noti {
-  static final FlutterLocalNotificationsPlugin _plugin =
-      FlutterLocalNotificationsPlugin();
-
-  static Future<void> init() async {
-    const AndroidInitializationSettings androidInit =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
-
-    const DarwinInitializationSettings iosInit = DarwinInitializationSettings();
-
-    const InitializationSettings settings =
-        InitializationSettings(android: androidInit, iOS: iosInit);
-
-    await _plugin.initialize(settings);
-  }
-
-  static Future<void> up() async {
-    const details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        'optimiser_channel',
-        'Optimiser Feedback',
-        channelDescription: 'Cadence optimisation cues',
-        importance: Importance.high,
-        priority: Priority.high,
-      ),
-      iOS: DarwinNotificationDetails(),
-    );
-
-    await _plugin.show(
-      1,
-      'Increase Rhythm',
-      'Step slightly quicker',
-      details,
-    );
-  }
-
-  static Future<void> down() async {
-    const details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        'optimiser_channel',
-        'Optimiser Feedback',
-        channelDescription: 'Cadence optimisation cues',
-        importance: Importance.high,
-        priority: Priority.high,
-      ),
-      iOS: DarwinNotificationDetails(),
-    );
-
-    await _plugin.show(
-      2,
-      'Ease Rhythm',
-      'Slow cadence slightly',
-      details,
-    );
-  }
-}
-
-// =============================================================
-// ENTRY
-// =============================================================
-void main() async {
+/// =============================================================
+/// ENTRY POINT
+/// =============================================================
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  await Noti.init(); // << REQUIRED for notifications
 
   final opt = OptimiserState();
 
@@ -96,23 +32,30 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Physiological Optimiser',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        appBarTheme: const AppBarTheme(centerTitle: true),
+      ),
       home: const OptimiserDashboard(),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
-// =============================================================
-// FEEDBACK MODE
-// =============================================================
-enum FeedbackMode { haptic, notification }
+/// =============================================================
+/// FEEDBACK MODE (HAPTIC ONLY)
+/// =============================================================
+enum FeedbackMode { haptic }
 
-// =============================================================
-// OPTIMISER STATE (HR ONLY)
-// =============================================================
+/// =============================================================
+/// HR-ONLY OPTIMISER STATE
+/// =============================================================
 class OptimiserState extends ChangeNotifier {
+  // Current HR
   double hr = 0;
   bool recording = false;
+
+  // HR history for graph
   final List<double> hrHistory = [];
 
   void _addHr(double bpm) {
@@ -120,43 +63,56 @@ class OptimiserState extends ChangeNotifier {
     if (hrHistory.length > 60) hrHistory.removeAt(0);
   }
 
+  // Sensitivity (1–5 bpm)
   double sensitivity = 3.0;
-  void setSensitivity(double v) {
-    sensitivity = v;
+  void setSensitivity(double value) {
+    sensitivity = value;
     notifyListeners();
   }
 
-  FeedbackMode feedbackMode = FeedbackMode.notification;
-
+  // Feedback mode
+  FeedbackMode feedbackMode = FeedbackMode.haptic;
   void setFeedbackMode(FeedbackMode m) {
     feedbackMode = m;
     notifyListeners();
   }
 
-  // Feedback dispatch
-  void _cueUp() {
-    Noti.up();
+  /// =============================================================
+  /// PURE HAPTIC FEEDBACK (SAFE FOR iOS)
+  /// =============================================================
+  void _signalUp() => _vibrateShort();
+  void _signalDown() => _vibrateLong();
+
+  Future<void> _vibrateShort() async {
+    if (await Vibration.hasVibrator() ?? false) {
+      Vibration.vibrate(duration: 150, intensities: [255]);
+    }
   }
 
-  void _cueDown() {
-    Noti.down();
+  Future<void> _vibrateLong() async {
+    if (await Vibration.hasVibrator() ?? false) {
+      Vibration.vibrate(duration: 800, intensities: [255]);
+    }
   }
 
-  // -----------------------------------------------------------
-  // GRADIENT LOGIC
-  // -----------------------------------------------------------
-  Timer? _loop;
-  DateTime? _lastTest;
-  DateTime? _start;
-  bool _testing = false;
-  String? _dir;
-  double? _hr0;
+  /// =============================================================
+  /// GRADIENT ASCENT LOOP
+  /// =============================================================
+  Timer? _loopTimer;
+
+  DateTime? _lastTestTime;
+  bool _testInProgress = false;
+  DateTime? _testStartTime;
+  String? _direction; // "up" or "down"
+
+  double? _hrBeforeTest;
 
   bool _plateau = false;
   double? _plateauHr;
 
   String _advice = "Tap ▶ to start workout";
 
+  /// Toggle workout recording
   void toggleRecording() {
     recording = !recording;
 
@@ -165,28 +121,33 @@ class OptimiserState extends ChangeNotifier {
       _startLoop();
       _advice = "Learning rhythm...";
     } else {
-      _loop?.cancel();
+      _stopLoop();
       _advice = "Tap ▶ to start workout";
     }
-
     notifyListeners();
   }
 
   void _reset() {
     _plateau = false;
     _plateauHr = null;
-    _testing = false;
-    _start = null;
-    _lastTest = null;
-    _dir = null;
-    _hr0 = null;
+    _lastTestTime = null;
+    _testInProgress = false;
+    _testStartTime = null;
+    _direction = null;
+    _hrBeforeTest = null;
   }
 
   void _startLoop() {
-    _loop?.cancel();
-    _loop = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+    _loopTimer?.cancel();
+    _loopTimer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
   }
 
+  void _stopLoop() {
+    _loopTimer?.cancel();
+    _loopTimer = null;
+  }
+
+  /// HR input from BLE
   void setHr(double bpm) {
     if (bpm <= 0 || bpm.isNaN) return;
     hr = bpm;
@@ -194,25 +155,30 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// =============================================================
+  /// GRADIENT TICK
+  /// =============================================================
   void _tick() {
     if (!recording || hr <= 0) return;
 
     final now = DateTime.now();
-    const int interval = 15;
-    const int delay = 15;
+    const int interval = 15; // seconds between tests
+    const int delay = 15; // evaluation time after cue
 
-    if (_testing) {
-      if (_start != null && now.difference(_start!).inSeconds >= delay) {
-        _evaluate();
+    if (_testInProgress) {
+      if (_testStartTime != null &&
+          now.difference(_testStartTime!).inSeconds >= delay) {
+        _evaluateTest();
       }
       return;
     }
 
-    if (_lastTest != null &&
-        now.difference(_lastTest!).inSeconds < interval) {
+    if (_lastTestTime != null &&
+        now.difference(_lastTestTime!).inSeconds < interval) {
       return;
     }
 
+    // Plateau detection
     if (_plateau && _plateauHr != null) {
       if ((hr - _plateauHr!).abs() < sensitivity) {
         _advice = "Optimal rhythm";
@@ -222,38 +188,49 @@ class OptimiserState extends ChangeNotifier {
       _plateau = false;
     }
 
-    String next;
-    next = (_dir == "up") ? "down" : "up";
+    // Decide direction
+    const double eps = 0.2;
 
-    _begin(next);
+    late String dir;
+
+    // Alternate early to gather initial data
+    if (_direction == null) {
+      dir = "up";
+    } else {
+      dir = (_direction == "up") ? "down" : "up";
+    }
+
+    _startTest(dir);
   }
 
-  void _begin(String d) {
-    _testing = true;
-    _dir = d;
-    _start = DateTime.now();
-    _lastTest = _start;
-    _hr0 = hr;
+  void _startTest(String dir) {
+    _testInProgress = true;
+    _direction = dir;
+    _testStartTime = DateTime.now();
+    _lastTestTime = _testStartTime;
 
-    if (d == "up") {
+    _hrBeforeTest = hr;
+
+    if (dir == "up") {
       _advice = "Increase rhythm";
-      _cueUp();
+      _signalUp();
     } else {
       _advice = "Ease rhythm";
-      _cueDown();
+      _signalDown();
     }
 
     notifyListeners();
   }
 
-  void _evaluate() {
-    _testing = false;
-    if (_hr0 == null) return;
+  void _evaluateTest() {
+    _testInProgress = false;
+    if (_hrBeforeTest == null) return;
 
-    final delta = hr - _hr0!;
-    final double threshold = sensitivity;
+    final delta = hr - _hrBeforeTest!;
+    final double plate = sensitivity;
 
-    if (delta.abs() < threshold) {
+    // Plateau detection
+    if (delta.abs() < plate) {
       _plateau = true;
       _plateauHr = hr;
       _advice = "Optimal rhythm";
@@ -264,6 +241,7 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Public getters
   String get rhythmAdvice => recording ? _advice : "Tap ▶ to start workout";
 
   Color get rhythmColor {
@@ -274,20 +252,19 @@ class OptimiserState extends ChangeNotifier {
   }
 }
 
-// =============================================================
-// BLE MANAGER (unchanged)
-// =============================================================
+/// =============================================================
+/// BLE MANAGER (flutter_reactive_ble)
+/// =============================================================
 class BleManager extends ChangeNotifier {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
 
-  final Uuid hrService =
-      Uuid.parse("0000180D-0000-1000-8000-00805F9B34FB");
-  final Uuid hrMeasurement =
-      Uuid.parse("00002A37-0000-1000-8000-00805F9B34FB");
+  // Standard Heart Rate Service + Measurement characteristic
+  final Uuid hrService = Uuid.parse("0000180D-0000-1000-8000-00805F9B34FB");
+  final Uuid hrMeasurement = Uuid.parse("00002A37-0000-1000-8000-00805F9B34FB");
 
-  StreamSubscription<DiscoveredDevice>? _scan;
-  StreamSubscription<ConnectionStateUpdate>? _conn;
-  StreamSubscription<List<int>>? _hr;
+  StreamSubscription<DiscoveredDevice>? _scanSub;
+  StreamSubscription<ConnectionStateUpdate>? _connSub;
+  StreamSubscription<List<int>>? _hrSub;
 
   String? connectedId;
   String? connectedName;
@@ -308,46 +285,49 @@ class BleManager extends ChangeNotifier {
     scanning = true;
     notifyListeners();
 
-    final comp = Completer<List<DiscoveredDevice>>();
+    final completer = Completer<List<DiscoveredDevice>>();
 
-    _scan = _ble
-        .scanForDevices(withServices: [])
+    _scanSub = _ble
+        .scanForDevices(
+          withServices: [], // scan all BLE devices
+        )
         .listen((d) {
       if (!devices.any((x) => x.id == d.id)) {
         devices.add(d);
         notifyListeners();
       }
     }, onError: (_) {
-      if (!comp.isCompleted) comp.complete(devices);
+      if (!completer.isCompleted) completer.complete(devices);
     });
 
     Future.delayed(timeout, () async {
-      await _scan?.cancel();
+      await _scanSub?.cancel();
       scanning = false;
       notifyListeners();
-      if (!comp.isCompleted) comp.complete(devices);
+      if (!completer.isCompleted) completer.complete(devices);
     });
 
-    return comp.future;
+    return completer.future;
   }
 
   int _parseHr(List<int> data) {
     if (data.isEmpty) return 0;
-    final f = data[0];
-    final is16 = (f & 0x01) != 0;
+    final flags = data[0];
+    final is16 = (flags & 0x01) != 0;
     if (is16) {
       if (data.length < 3) return 0;
       return data[1] | (data[2] << 8);
+    } else {
+      if (data.length < 2) return 0;
+      return data[1];
     }
-    if (data.length < 2) return 0;
-    return data[1];
   }
 
   Future<void> connect(String id, String name, OptimiserState opt) async {
-    _conn?.cancel();
-    _hr?.cancel();
+    _connSub?.cancel();
+    _hrSub?.cancel();
 
-    _conn = _ble.connectToDevice(id: id).listen((event) {
+    _connSub = _ble.connectToDevice(id: id).listen((event) {
       if (event.connectionState == DeviceConnectionState.connected) {
         connectedId = id;
         connectedName = name.isEmpty ? "(unknown)" : name;
@@ -359,12 +339,11 @@ class BleManager extends ChangeNotifier {
           characteristicId: hrMeasurement,
         );
 
-        _hr = _ble.subscribeToCharacteristic(hrChar).listen((data) {
+        _hrSub = _ble.subscribeToCharacteristic(hrChar).listen((data) {
           final bpm = _parseHr(data);
           if (bpm > 0) opt.setHr(bpm.toDouble());
         });
-      } else if (event.connectionState ==
-          DeviceConnectionState.disconnected) {
+      } else if (event.connectionState == DeviceConnectionState.disconnected) {
         connectedId = null;
         connectedName = null;
         notifyListeners();
@@ -377,8 +356,8 @@ class BleManager extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
-    await _hr?.cancel();
-    await _conn?.cancel();
+    await _hrSub?.cancel();
+    await _connSub?.cancel();
     connectedId = null;
     connectedName = null;
     notifyListeners();
@@ -386,16 +365,16 @@ class BleManager extends ChangeNotifier {
 
   @override
   void dispose() {
-    _scan?.cancel();
-    _conn?.cancel();
-    _hr?.cancel();
+    _scanSub?.cancel();
+    _connSub?.cancel();
+    _hrSub?.cancel();
     super.dispose();
   }
 }
 
-// =============================================================
-// UI (unchanged except dropdown default)
-// =============================================================
+/// =============================================================
+/// MAIN DASHBOARD UI
+/// =============================================================
 class OptimiserDashboard extends StatelessWidget {
   const OptimiserDashboard({super.key});
 
@@ -406,19 +385,22 @@ class OptimiserDashboard extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Physiological Optimiser"),
         leading: IconButton(
           icon: Icon(
             ble.connectedId == null
                 ? Icons.bluetooth
                 : Icons.bluetooth_connected,
           ),
+          tooltip: ble.connectedName == null
+              ? 'Bluetooth devices'
+              : 'Connected: ${ble.connectedName}',
           onPressed: () => _openBleSheet(context),
         ),
+        title: const Text("Physiological Optimiser"),
       ),
       body: Column(
         children: [
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
           Text(
             opt.rhythmAdvice,
             style: TextStyle(
@@ -428,9 +410,10 @@ class OptimiserDashboard extends StatelessWidget {
             ),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Text("HR: ${opt.hr.toStringAsFixed(0)} bpm"),
 
+          /// Sensitivity selector
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -451,6 +434,7 @@ class OptimiserDashboard extends StatelessWidget {
             ],
           ),
 
+          /// Feedback mode
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -459,8 +443,8 @@ class OptimiserDashboard extends StatelessWidget {
                 value: opt.feedbackMode,
                 items: const [
                   DropdownMenuItem(
-                    value: FeedbackMode.notification,
-                    child: Text("System Banner"),
+                    value: FeedbackMode.haptic,
+                    child: Text("Haptic"),
                   ),
                 ],
                 onChanged: (v) {
@@ -469,11 +453,16 @@ class OptimiserDashboard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 12),
+
+          const SizedBox(height: 10),
           SizedBox(height: 200, child: HrGraph(opt: opt)),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
+
           if (ble.connectedName != null)
-            Text("Connected: ${ble.connectedName}"),
+            Text(
+              "Connected to: ${ble.connectedName}",
+              style: const TextStyle(color: Colors.black54),
+            ),
         ],
       ),
       floatingActionButton: FloatingActionButton(
@@ -488,12 +477,17 @@ class OptimiserDashboard extends StatelessWidget {
     final ble = ctx.read<BleManager>();
     showModalBottomSheet(
       context: ctx,
-      builder: (_) =>
-          ChangeNotifierProvider.value(value: ble, child: const _BleBottomSheet()),
+      builder: (_) => ChangeNotifierProvider.value(
+        value: ble,
+        child: const _BleBottomSheet(),
+      ),
     );
   }
 }
 
+/// =============================================================
+/// BLE DEVICE PICKER UI
+/// =============================================================
 class _BleBottomSheet extends StatefulWidget {
   const _BleBottomSheet();
 
@@ -507,10 +501,10 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
   @override
   void initState() {
     super.initState();
-    _scan();
+    _startScan();
   }
 
-  Future<void> _scan() async {
+  Future<void> _startScan() async {
     final ble = context.read<BleManager>();
     devices = await ble.scanDevices();
     if (mounted) setState(() {});
@@ -526,50 +520,61 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Row(children: [
-              const Icon(Icons.bluetooth),
-              const SizedBox(width: 8),
-              Text(
-                ble.scanning ? "Scanning…" : "Bluetooth Devices",
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const Spacer(),
-              if (ble.connectedId != null)
-                IconButton(
-                  icon: const Icon(Icons.link_off),
-                  onPressed: () => ble.disconnect(),
+            Row(
+              children: [
+                const Icon(Icons.bluetooth),
+                const SizedBox(width: 8),
+                Text(
+                  ble.scanning ? "Scanning…" : "Bluetooth Devices",
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-            ]),
+                const Spacer(),
+                if (ble.connectedId != null)
+                  IconButton(
+                    icon: const Icon(Icons.link_off),
+                    tooltip: "Disconnect",
+                    onPressed: () => ble.disconnect(),
+                  ),
+              ],
+            ),
             const SizedBox(height: 12),
+
             Flexible(
               child: devices.isEmpty
                   ? const Text(
-                      "No devices found.\nEnsure HR strap is on.",
+                      "No devices found.\nEnsure HR strap is on and advertising.",
                       textAlign: TextAlign.center,
                     )
                   : ListView.separated(
                       itemCount: devices.length,
                       separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (_, i) {
+                      itemBuilder: (ctx, i) {
                         final d = devices[i];
                         final name = d.name.isNotEmpty ? d.name : "(unknown)";
                         return ListTile(
+                          leading: const Icon(Icons.watch),
                           title: Text(name),
                           subtitle: Text(d.id),
                           trailing: const Icon(Icons.chevron_right),
                           onTap: () async {
                             final opt = context.read<OptimiserState>();
                             await ble.connect(d.id, name, opt);
-                            if (mounted) Navigator.pop(context);
+                            if (ctx.mounted) Navigator.pop(ctx);
                           },
                         );
                       },
                     ),
             ),
+
+            const SizedBox(height: 10),
+
             Row(
               children: [
                 TextButton.icon(
-                  onPressed: _scan,
+                  onPressed: _startScan,
                   icon: const Icon(Icons.refresh),
                   label: const Text("Rescan"),
                 ),
@@ -587,9 +592,9 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
   }
 }
 
-// =============================================================
-// GRAPH (unchanged)
-// =============================================================
+/// =============================================================
+/// HR GRAPH WIDGET (FIXED maxX TYPE)
+/// =============================================================
 class HrGraph extends StatelessWidget {
   final OptimiserState opt;
   const HrGraph({super.key, required this.opt});
@@ -602,17 +607,28 @@ class HrGraph extends StatelessWidget {
         .map((e) => FlSpot(e.key.toDouble(), e.value))
         .toList();
 
-    double minY = 50, maxY = 180;
+    double minY = 50;
+    double maxY = 180;
 
     if (points.isNotEmpty) {
-      minY = points.map((p) => p.y).reduce((a, b) => a < b ? a : b) - 5;
-      maxY = points.map((p) => p.y).reduce((a, b) => a > b ? a : b) + 5;
+      double minVal = points.first.y;
+      double maxVal = points.first.y;
+
+      for (final p in points) {
+        if (p.y < minVal) minVal = p.y;
+        if (p.y > maxVal) maxVal = p.y;
+      }
+
+      minY = minVal - 5;
+      maxY = maxVal + 5;
 
       if (minY < 40) minY = 40;
       if (maxY < minY + 10) maxY = minY + 10;
     }
 
-    final maxX = points.isEmpty ? 1 : (points.length - 1).toDouble();
+    // FIXED: Ensure correct double type
+    final double maxX =
+        points.isEmpty ? 1.0 : (points.length - 1).toDouble();
 
     return LineChart(
       LineChartData(
@@ -627,7 +643,7 @@ class HrGraph extends StatelessWidget {
             barWidth: 3,
             color: Colors.green,
             dotData: FlDotData(show: false),
-          )
+          ),
         ],
         titlesData: FlTitlesData(show: false),
         gridData: FlGridData(show: false),
