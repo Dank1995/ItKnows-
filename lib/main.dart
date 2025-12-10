@@ -5,6 +5,7 @@ import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:vibration/vibration.dart';
+import 'package:flutter/services.dart'; // <-- Added for iOS haptic engine
 
 /// =============================================================
 /// ENTRY POINT
@@ -48,7 +49,7 @@ class MyApp extends StatelessWidget {
 enum FeedbackMode { haptic }
 
 /// =============================================================
-/// OPTIMISER (NO MEMORY VERSION)
+/// HR-ONLY OPTIMISER STATE
 /// =============================================================
 class OptimiserState extends ChangeNotifier {
   double hr = 0;
@@ -62,8 +63,8 @@ class OptimiserState extends ChangeNotifier {
   }
 
   double sensitivity = 3.0;
-  void setSensitivity(double v) {
-    sensitivity = v;
+  void setSensitivity(double value) {
+    sensitivity = value;
     notifyListeners();
   }
 
@@ -73,34 +74,27 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// =====================================================================
-  /// DIFFERENTIATED HAPTICS (iOS SAFE)
-  /// =====================================================================
+  /// =============================================================
+  /// UPDATED: DIFFERENTIATED HAPTICS USING APPLE HAPTIC ENGINE
+  /// =============================================================
   Future<void> _signalUp() async {
-    if (await Vibration.hasVibrator() ?? false) {
-      // Two short taps = UP
-      Vibration.vibrate(duration: 80);
-      await Future.delayed(const Duration(milliseconds: 140));
-      Vibration.vibrate(duration: 80);
-    }
+    HapticFeedback.lightImpact(); // Sharp tap → increase cadence
   }
 
   Future<void> _signalDown() async {
-    if (await Vibration.hasVibrator() ?? false) {
-      // One medium buzz = DOWN
-      Vibration.vibrate(duration: 300);
-    }
+    HapticFeedback.heavyImpact(); // Deep thud → decrease cadence
   }
 
-  /// =====================================================================
+  /// =============================================================
   /// REAL-TIME OPTIMISER LOOP (NO MEMORY)
-  /// =====================================================================
+  /// =============================================================
   Timer? _loopTimer;
 
   DateTime? _lastTestTime;
   bool _testInProgress = false;
   DateTime? _testStartTime;
   String? _direction;
+
   double? _hrBeforeTest;
 
   bool _plateau = false;
@@ -130,7 +124,6 @@ class OptimiserState extends ChangeNotifier {
     _testInProgress = false;
     _testStartTime = null;
     _direction = null;
-
     _hrBeforeTest = null;
   }
 
@@ -151,17 +144,16 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// =====================================================================
-  /// GRADIENT TICK (CLEAN VERSION)
-  /// =====================================================================
+  /// =============================================================
+  /// GRADIENT TICK
+  /// =============================================================
   void _tick() {
     if (!recording || hr <= 0) return;
 
     final now = DateTime.now();
-    const int interval = 15; 
-    const int delay = 15;   
+    const int interval = 15;
+    const int delay = 15;
 
-    // Finish evaluation
     if (_testInProgress) {
       if (_testStartTime != null &&
           now.difference(_testStartTime!).inSeconds >= delay) {
@@ -170,11 +162,11 @@ class OptimiserState extends ChangeNotifier {
       return;
     }
 
-    // Wait until next test
     if (_lastTestTime != null &&
-        now.difference(_lastTestTime!).inSeconds < interval) return;
+        now.difference(_lastTestTime!).inSeconds < interval) {
+      return;
+    }
 
-    // Plateau check
     if (_plateau && _plateauHr != null) {
       if ((hr - _plateauHr!).abs() < sensitivity) {
         _advice = "Optimal rhythm";
@@ -184,7 +176,6 @@ class OptimiserState extends ChangeNotifier {
       _plateau = false;
     }
 
-    // Direction always alternates when learning
     String dir = (_direction == "up") ? "down" : "up";
 
     _startTest(dir);
@@ -444,7 +435,6 @@ class OptimiserDashboard extends StatelessWidget {
   }
 }
 
-/// BLE Device Picker
 class _BleBottomSheet extends StatefulWidget {
   const _BleBottomSheet();
 
