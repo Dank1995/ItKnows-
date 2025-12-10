@@ -48,13 +48,12 @@ class MyApp extends StatelessWidget {
 enum FeedbackMode { haptic }
 
 /// =============================================================
-/// HR-ONLY OPTIMISER (MEMORYLESS VERSION)
+/// OPTIMISER (NO MEMORY VERSION)
 /// =============================================================
 class OptimiserState extends ChangeNotifier {
   double hr = 0;
   bool recording = false;
 
-  // HR history
   final List<double> hrHistory = [];
 
   void _addHr(double bpm) {
@@ -62,43 +61,46 @@ class OptimiserState extends ChangeNotifier {
     if (hrHistory.length > 60) hrHistory.removeAt(0);
   }
 
-  // Sensitivity = plateau width
   double sensitivity = 3.0;
   void setSensitivity(double v) {
     sensitivity = v;
     notifyListeners();
   }
 
-  // Feedback mode
   FeedbackMode feedbackMode = FeedbackMode.haptic;
   void setFeedbackMode(FeedbackMode m) {
     feedbackMode = m;
     notifyListeners();
   }
 
-  // --- HAPTICS ---
-  void _signalUp() => _vibrateShort();
-  void _signalDown() => _vibrateLong();
-
-  Future<void> _vibrateShort() async {
+  /// =====================================================================
+  /// DIFFERENTIATED HAPTICS (iOS SAFE)
+  /// =====================================================================
+  Future<void> _signalUp() async {
     if (await Vibration.hasVibrator() ?? false) {
-      Vibration.vibrate(duration: 150, intensities: [255]);
+      // Two short taps = UP
+      Vibration.vibrate(duration: 80);
+      await Future.delayed(const Duration(milliseconds: 140));
+      Vibration.vibrate(duration: 80);
     }
   }
 
-  Future<void> _vibrateLong() async {
+  Future<void> _signalDown() async {
     if (await Vibration.hasVibrator() ?? false) {
-      Vibration.vibrate(duration: 800, intensities: [255]);
+      // One medium buzz = DOWN
+      Vibration.vibrate(duration: 300);
     }
   }
 
-  // --- Test loop ---
+  /// =====================================================================
+  /// REAL-TIME OPTIMISER LOOP (NO MEMORY)
+  /// =====================================================================
   Timer? _loopTimer;
+
   DateTime? _lastTestTime;
   bool _testInProgress = false;
   DateTime? _testStartTime;
-
-  String? _direction; // "up" or "down"
+  String? _direction;
   double? _hrBeforeTest;
 
   bool _plateau = false;
@@ -106,9 +108,6 @@ class OptimiserState extends ChangeNotifier {
 
   String _advice = "Tap ▶ to start workout";
 
-  // ============================================
-  // START / STOP RECORDING
-  // ============================================
   void toggleRecording() {
     recording = !recording;
 
@@ -120,17 +119,18 @@ class OptimiserState extends ChangeNotifier {
       _stopLoop();
       _advice = "Tap ▶ to start workout";
     }
-
     notifyListeners();
   }
 
   void _reset() {
     _plateau = false;
     _plateauHr = null;
+
     _lastTestTime = null;
     _testInProgress = false;
     _testStartTime = null;
     _direction = null;
+
     _hrBeforeTest = null;
   }
 
@@ -144,7 +144,6 @@ class OptimiserState extends ChangeNotifier {
     _loopTimer = null;
   }
 
-  // Called by BLE HR updates
   void setHr(double bpm) {
     if (bpm <= 0 || bpm.isNaN) return;
     hr = bpm;
@@ -152,30 +151,30 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // =============================================================
-  // MEMORYLESS OPTIMISER TICK
-  // =============================================================
+  /// =====================================================================
+  /// GRADIENT TICK (CLEAN VERSION)
+  /// =====================================================================
   void _tick() {
     if (!recording || hr <= 0) return;
 
     final now = DateTime.now();
-    const int interval = 15;
-    const int evalDelay = 15;
+    const int interval = 15; 
+    const int delay = 15;   
 
+    // Finish evaluation
     if (_testInProgress) {
       if (_testStartTime != null &&
-          now.difference(_testStartTime!).inSeconds >= evalDelay) {
+          now.difference(_testStartTime!).inSeconds >= delay) {
         _evaluateTest();
       }
       return;
     }
 
+    // Wait until next test
     if (_lastTestTime != null &&
-        now.difference(_lastTestTime!).inSeconds < interval) {
-      return;
-    }
+        now.difference(_lastTestTime!).inSeconds < interval) return;
 
-    // Plateau detection
+    // Plateau check
     if (_plateau && _plateauHr != null) {
       if ((hr - _plateauHr!).abs() < sensitivity) {
         _advice = "Optimal rhythm";
@@ -185,23 +184,12 @@ class OptimiserState extends ChangeNotifier {
       _plateau = false;
     }
 
-    // --- Direction selection (memoryless alternating logic) ---
-    String dir;
-
-    if (_direction == null) {
-      // First test → start by going up
-      dir = "up";
-    } else {
-      // Alternate directions unless evaluation overrides later
-      dir = (_direction == "up") ? "down" : "up";
-    }
+    // Direction always alternates when learning
+    String dir = (_direction == "up") ? "down" : "up";
 
     _startTest(dir);
   }
 
-  // =============================================================
-  // START TEST
-  // =============================================================
   void _startTest(String dir) {
     _testInProgress = true;
     _direction = dir;
@@ -221,9 +209,6 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // =============================================================
-  // EVALUATE TEST — the ONLY learning this system needs
-  // =============================================================
   void _evaluateTest() {
     _testInProgress = false;
     if (_hrBeforeTest == null) return;
@@ -231,7 +216,6 @@ class OptimiserState extends ChangeNotifier {
     final delta = hr - _hrBeforeTest!;
     final double plate = sensitivity;
 
-    // Plateau detection
     if (delta.abs() < plate) {
       _plateau = true;
       _plateauHr = hr;
@@ -240,20 +224,9 @@ class OptimiserState extends ChangeNotifier {
       return;
     }
 
-    // If HR went up → too hard → go down next
-    if (delta > 0) {
-      _direction = "down";
-    } else {
-      // HR went down → too easy → go up next
-      _direction = "up";
-    }
-
     notifyListeners();
   }
 
-  // =============================================================
-  // UI GETTERS
-  // =============================================================
   String get rhythmAdvice => recording ? _advice : "Tap ▶ to start workout";
 
   Color get rhythmColor {
@@ -298,9 +271,7 @@ class BleManager extends ChangeNotifier {
 
     final completer = Completer<List<DiscoveredDevice>>();
 
-    _scanSub = _ble
-        .scanForDevices(withServices: [])
-        .listen((d) {
+    _scanSub = _ble.scanForDevices(withServices: []).listen((d) {
       if (!devices.any((x) => x.id == d.id)) {
         devices.add(d);
         notifyListeners();
@@ -352,8 +323,7 @@ class BleManager extends ChangeNotifier {
           final bpm = _parseHr(data);
           if (bpm > 0) opt.setHr(bpm.toDouble());
         });
-      } else if (event.connectionState ==
-          DeviceConnectionState.disconnected) {
+      } else if (event.connectionState == DeviceConnectionState.disconnected) {
         connectedId = null;
         connectedName = null;
         notifyListeners();
@@ -383,7 +353,7 @@ class BleManager extends ChangeNotifier {
 }
 
 /// =============================================================
-/// MAIN DASHBOARD UI
+/// UI
 /// =============================================================
 class OptimiserDashboard extends StatelessWidget {
   const OptimiserDashboard({super.key});
@@ -423,7 +393,6 @@ class OptimiserDashboard extends StatelessWidget {
           const SizedBox(height: 10),
           Text("HR: ${opt.hr.toStringAsFixed(0)} bpm"),
 
-          // Sensitivity selector
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -439,26 +408,6 @@ class OptimiserDashboard extends StatelessWidget {
                 ],
                 onChanged: (v) {
                   if (v != null) opt.setSensitivity(v);
-                },
-              ),
-            ],
-          ),
-
-          // Feedback mode (static)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text("Feedback: "),
-              DropdownButton<FeedbackMode>(
-                value: opt.feedbackMode,
-                items: const [
-                  DropdownMenuItem(
-                    value: FeedbackMode.haptic,
-                    child: Text("Haptic"),
-                  ),
-                ],
-                onChanged: (v) {
-                  if (v != null) opt.setFeedbackMode(v);
                 },
               ),
             ],
@@ -495,9 +444,7 @@ class OptimiserDashboard extends StatelessWidget {
   }
 }
 
-/// =============================================================
-/// BLE DEVICE PICKER
-/// =============================================================
+/// BLE Device Picker
 class _BleBottomSheet extends StatefulWidget {
   const _BleBottomSheet();
 
@@ -602,9 +549,7 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
   }
 }
 
-/// =============================================================
-/// HR GRAPH WIDGET
-/// =============================================================
+/// HR GRAPH
 class HrGraph extends StatelessWidget {
   final OptimiserState opt;
   const HrGraph({super.key, required this.opt});
