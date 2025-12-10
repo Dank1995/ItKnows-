@@ -48,14 +48,13 @@ class MyApp extends StatelessWidget {
 enum FeedbackMode { haptic }
 
 /// =============================================================
-/// HR-ONLY OPTIMISER STATE
+/// HR-ONLY OPTIMISER (MEMORYLESS VERSION)
 /// =============================================================
 class OptimiserState extends ChangeNotifier {
-  // Current HR
   double hr = 0;
   bool recording = false;
 
-  // HR history for graph
+  // HR history
   final List<double> hrHistory = [];
 
   void _addHr(double bpm) {
@@ -63,10 +62,10 @@ class OptimiserState extends ChangeNotifier {
     if (hrHistory.length > 60) hrHistory.removeAt(0);
   }
 
-  // Sensitivity (1–5 bpm)
+  // Sensitivity = plateau width
   double sensitivity = 3.0;
-  void setSensitivity(double value) {
-    sensitivity = value;
+  void setSensitivity(double v) {
+    sensitivity = v;
     notifyListeners();
   }
 
@@ -77,9 +76,7 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// =============================================================
-  /// PURE HAPTIC FEEDBACK (SAFE FOR iOS)
-  /// =============================================================
+  // --- HAPTICS ---
   void _signalUp() => _vibrateShort();
   void _signalDown() => _vibrateLong();
 
@@ -95,29 +92,23 @@ class OptimiserState extends ChangeNotifier {
     }
   }
 
-  /// =============================================================
-  /// GRADIENT ASCENT LOOP
-  /// =============================================================
+  // --- Test loop ---
   Timer? _loopTimer;
-
   DateTime? _lastTestTime;
   bool _testInProgress = false;
   DateTime? _testStartTime;
-  String? _direction; // "up" or "down"
 
+  String? _direction; // "up" or "down"
   double? _hrBeforeTest;
 
   bool _plateau = false;
   double? _plateauHr;
 
-  double _avgUp = 0;
-  double _avgDown = 0;
-  int _upN = 0;
-  int _downN = 0;
-
   String _advice = "Tap ▶ to start workout";
 
-  /// Toggle workout recording
+  // ============================================
+  // START / STOP RECORDING
+  // ============================================
   void toggleRecording() {
     recording = !recording;
 
@@ -129,6 +120,7 @@ class OptimiserState extends ChangeNotifier {
       _stopLoop();
       _advice = "Tap ▶ to start workout";
     }
+
     notifyListeners();
   }
 
@@ -140,11 +132,6 @@ class OptimiserState extends ChangeNotifier {
     _testStartTime = null;
     _direction = null;
     _hrBeforeTest = null;
-
-    _avgUp = 0;
-    _avgDown = 0;
-    _upN = 0;
-    _downN = 0;
   }
 
   void _startLoop() {
@@ -157,7 +144,7 @@ class OptimiserState extends ChangeNotifier {
     _loopTimer = null;
   }
 
-  /// HR input from BLE
+  // Called by BLE HR updates
   void setHr(double bpm) {
     if (bpm <= 0 || bpm.isNaN) return;
     hr = bpm;
@@ -165,19 +152,19 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// =============================================================
-  /// GRADIENT TICK
-  /// =============================================================
+  // =============================================================
+  // MEMORYLESS OPTIMISER TICK
+  // =============================================================
   void _tick() {
     if (!recording || hr <= 0) return;
 
     final now = DateTime.now();
-    const int interval = 15; // seconds between tests
-    const int delay = 15; // evaluation time after cue
+    const int interval = 15;
+    const int evalDelay = 15;
 
     if (_testInProgress) {
       if (_testStartTime != null &&
-          now.difference(_testStartTime!).inSeconds >= delay) {
+          now.difference(_testStartTime!).inSeconds >= evalDelay) {
         _evaluateTest();
       }
       return;
@@ -198,25 +185,23 @@ class OptimiserState extends ChangeNotifier {
       _plateau = false;
     }
 
-    // Decide direction
-    const double eps = 0.2;
+    // --- Direction selection (memoryless alternating logic) ---
     String dir;
 
-    if (_upN + _downN < 2) {
-      dir = (_direction == "up") ? "down" : "up";
+    if (_direction == null) {
+      // First test → start by going up
+      dir = "up";
     } else {
-      if (_avgUp < _avgDown - eps) {
-        dir = "up";
-      } else if (_avgDown < _avgUp - eps) {
-        dir = "down";
-      } else {
-        dir = (_direction == "up") ? "down" : "up";
-      }
+      // Alternate directions unless evaluation overrides later
+      dir = (_direction == "up") ? "down" : "up";
     }
 
     _startTest(dir);
   }
 
+  // =============================================================
+  // START TEST
+  // =============================================================
   void _startTest(String dir) {
     _testInProgress = true;
     _direction = dir;
@@ -236,6 +221,9 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // =============================================================
+  // EVALUATE TEST — the ONLY learning this system needs
+  // =============================================================
   void _evaluateTest() {
     _testInProgress = false;
     if (_hrBeforeTest == null) return;
@@ -252,18 +240,20 @@ class OptimiserState extends ChangeNotifier {
       return;
     }
 
-    if (_direction == "up") {
-      _upN++;
-      _avgUp = ((_avgUp * (_upN - 1)) + delta) / _upN;
+    // If HR went up → too hard → go down next
+    if (delta > 0) {
+      _direction = "down";
     } else {
-      _downN++;
-      _avgDown = ((_avgDown * (_downN - 1)) + delta) / _downN;
+      // HR went down → too easy → go up next
+      _direction = "up";
     }
 
     notifyListeners();
   }
 
-  /// Public getters
+  // =============================================================
+  // UI GETTERS
+  // =============================================================
   String get rhythmAdvice => recording ? _advice : "Tap ▶ to start workout";
 
   Color get rhythmColor {
@@ -275,12 +265,11 @@ class OptimiserState extends ChangeNotifier {
 }
 
 /// =============================================================
-/// BLE MANAGER (flutter_reactive_ble)
+/// BLE MANAGER
 /// =============================================================
 class BleManager extends ChangeNotifier {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
 
-  // Standard Heart Rate Service + Measurement characteristic
   final Uuid hrService = Uuid.parse("0000180D-0000-1000-8000-00805F9B34FB");
   final Uuid hrMeasurement = Uuid.parse("00002A37-0000-1000-8000-00805F9B34FB");
 
@@ -310,9 +299,7 @@ class BleManager extends ChangeNotifier {
     final completer = Completer<List<DiscoveredDevice>>();
 
     _scanSub = _ble
-        .scanForDevices(
-          withServices: [], // all devices; HR straps usually still show
-        )
+        .scanForDevices(withServices: [])
         .listen((d) {
       if (!devices.any((x) => x.id == d.id)) {
         devices.add(d);
@@ -365,7 +352,8 @@ class BleManager extends ChangeNotifier {
           final bpm = _parseHr(data);
           if (bpm > 0) opt.setHr(bpm.toDouble());
         });
-      } else if (event.connectionState == DeviceConnectionState.disconnected) {
+      } else if (event.connectionState ==
+          DeviceConnectionState.disconnected) {
         connectedId = null;
         connectedName = null;
         notifyListeners();
@@ -435,7 +423,7 @@ class OptimiserDashboard extends StatelessWidget {
           const SizedBox(height: 10),
           Text("HR: ${opt.hr.toStringAsFixed(0)} bpm"),
 
-          /// Sensitivity selector
+          // Sensitivity selector
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -456,7 +444,7 @@ class OptimiserDashboard extends StatelessWidget {
             ],
           ),
 
-          /// Feedback mode (only haptic for now)
+          // Feedback mode (static)
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -508,7 +496,7 @@ class OptimiserDashboard extends StatelessWidget {
 }
 
 /// =============================================================
-/// BLE DEVICE PICKER UI
+/// BLE DEVICE PICKER
 /// =============================================================
 class _BleBottomSheet extends StatefulWidget {
   const _BleBottomSheet();
