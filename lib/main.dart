@@ -4,8 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:fl_chart/fl_chart.dart';
-import 'package:vibration/vibration.dart';
-import 'package:flutter/services.dart'; // <-- Added for iOS haptic engine
+import 'package:flutter/services.dart';
 
 /// =============================================================
 /// ENTRY POINT
@@ -49,19 +48,21 @@ class MyApp extends StatelessWidget {
 enum FeedbackMode { haptic }
 
 /// =============================================================
-/// HR-ONLY OPTIMISER STATE
+/// HR-ONLY OPTIMISER STATE (NO MEMORY VERSION)
 /// =============================================================
 class OptimiserState extends ChangeNotifier {
+  // Current HR
   double hr = 0;
   bool recording = false;
 
+  // HR history for graph
   final List<double> hrHistory = [];
-
   void _addHr(double bpm) {
     hrHistory.add(bpm);
     if (hrHistory.length > 60) hrHistory.removeAt(0);
   }
 
+  // Sensitivity threshold (bpm)
   double sensitivity = 3.0;
   void setSensitivity(double value) {
     sensitivity = value;
@@ -75,30 +76,32 @@ class OptimiserState extends ChangeNotifier {
   }
 
   /// =============================================================
-  /// UPDATED: DIFFERENTIATED HAPTICS USING APPLE HAPTIC ENGINE
+  /// *** FIXED iPHONE-COMPATIBLE HAPTICS ***
+  /// Increase = single tap
+  /// Decrease = double tap
   /// =============================================================
+
   Future<void> _signalUp() async {
-    HapticFeedback.lightImpact(); // Sharp tap → increase cadence
+    HapticFeedback.mediumImpact(); // one tap
   }
 
   Future<void> _signalDown() async {
-    HapticFeedback.heavyImpact(); // Deep thud → decrease cadence
+    HapticFeedback.mediumImpact(); // tap 1
+    await Future.delayed(const Duration(milliseconds: 150));
+    HapticFeedback.mediumImpact(); // tap 2
   }
 
   /// =============================================================
-  /// REAL-TIME OPTIMISER LOOP (NO MEMORY)
+  /// GRADIENT ASCENT LOOP (NO MEMORY)
   /// =============================================================
   Timer? _loopTimer;
 
   DateTime? _lastTestTime;
   bool _testInProgress = false;
   DateTime? _testStartTime;
-  String? _direction;
 
+  String? _direction; // "up" or "down"
   double? _hrBeforeTest;
-
-  bool _plateau = false;
-  double? _plateauHr;
 
   String _advice = "Tap ▶ to start workout";
 
@@ -117,9 +120,6 @@ class OptimiserState extends ChangeNotifier {
   }
 
   void _reset() {
-    _plateau = false;
-    _plateauHr = null;
-
     _lastTestTime = null;
     _testInProgress = false;
     _testStartTime = null;
@@ -145,7 +145,7 @@ class OptimiserState extends ChangeNotifier {
   }
 
   /// =============================================================
-  /// GRADIENT TICK
+  /// GRADIENT TICK (NO MEMORY)
   /// =============================================================
   void _tick() {
     if (!recording || hr <= 0) return;
@@ -167,16 +167,13 @@ class OptimiserState extends ChangeNotifier {
       return;
     }
 
-    if (_plateau && _plateauHr != null) {
-      if ((hr - _plateauHr!).abs() < sensitivity) {
-        _advice = "Optimal rhythm";
-        notifyListeners();
-        return;
-      }
-      _plateau = false;
+    // Decide next direction: alternate up/down
+    String dir;
+    if (_direction == null) {
+      dir = "up";
+    } else {
+      dir = (_direction == "up") ? "down" : "up";
     }
-
-    String dir = (_direction == "up") ? "down" : "up";
 
     _startTest(dir);
   }
@@ -202,17 +199,29 @@ class OptimiserState extends ChangeNotifier {
 
   void _evaluateTest() {
     _testInProgress = false;
+
     if (_hrBeforeTest == null) return;
 
     final delta = hr - _hrBeforeTest!;
-    final double plate = sensitivity;
 
-    if (delta.abs() < plate) {
-      _plateau = true;
-      _plateauHr = hr;
+    // Plateau detection
+    if (delta.abs() < sensitivity) {
       _advice = "Optimal rhythm";
       notifyListeners();
       return;
+    }
+
+    // If HR increased too much → ease rhythm
+    if (delta > sensitivity) {
+      _direction = "down";
+      _advice = "Ease rhythm";
+      _signalDown();
+    }
+    // If HR dropped too much → increase rhythm
+    else if (delta < -sensitivity) {
+      _direction = "up";
+      _advice = "Increase rhythm";
+      _signalUp();
     }
 
     notifyListeners();
@@ -229,7 +238,7 @@ class OptimiserState extends ChangeNotifier {
 }
 
 /// =============================================================
-/// BLE MANAGER
+/// BLE MANAGER (unchanged)
 /// =============================================================
 class BleManager extends ChangeNotifier {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
@@ -262,7 +271,9 @@ class BleManager extends ChangeNotifier {
 
     final completer = Completer<List<DiscoveredDevice>>();
 
-    _scanSub = _ble.scanForDevices(withServices: []).listen((d) {
+    _scanSub = _ble
+        .scanForDevices(withServices: [])
+        .listen((d) {
       if (!devices.any((x) => x.id == d.id)) {
         devices.add(d);
         notifyListeners();
@@ -344,7 +355,7 @@ class BleManager extends ChangeNotifier {
 }
 
 /// =============================================================
-/// UI
+/// MAIN DASHBOARD UI (unchanged)
 /// =============================================================
 class OptimiserDashboard extends StatelessWidget {
   const OptimiserDashboard({super.key});
@@ -404,6 +415,25 @@ class OptimiserDashboard extends StatelessWidget {
             ],
           ),
 
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text("Feedback: "),
+              DropdownButton<FeedbackMode>(
+                value: opt.feedbackMode,
+                items: const [
+                  DropdownMenuItem(
+                    value: FeedbackMode.haptic,
+                    child: Text("Haptic"),
+                  ),
+                ],
+                onChanged: (v) {
+                  if (v != null) opt.setFeedbackMode(v);
+                },
+              ),
+            ],
+          ),
+
           const SizedBox(height: 10),
           SizedBox(height: 200, child: HrGraph(opt: opt)),
           const SizedBox(height: 10),
@@ -435,6 +465,9 @@ class OptimiserDashboard extends StatelessWidget {
   }
 }
 
+/// =============================================================
+/// BLE DEVICE PICKER UI (unchanged)
+/// =============================================================
 class _BleBottomSheet extends StatefulWidget {
   const _BleBottomSheet();
 
@@ -539,7 +572,9 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
   }
 }
 
-/// HR GRAPH
+/// =============================================================
+/// HR GRAPH WIDGET (unchanged)
+/// =============================================================
 class HrGraph extends StatelessWidget {
   final OptimiserState opt;
   const HrGraph({super.key, required this.opt});
