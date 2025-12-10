@@ -43,7 +43,7 @@ class MyApp extends StatelessWidget {
 }
 
 /// =============================================================
-/// FEEDBACK MODE (HAPTIC ONLY)
+/// FEEDBACK MODE
 /// =============================================================
 enum FeedbackMode { haptic }
 
@@ -51,11 +51,9 @@ enum FeedbackMode { haptic }
 /// HR-ONLY OPTIMISER STATE
 /// =============================================================
 class OptimiserState extends ChangeNotifier {
-  // Current HR
   double hr = 0;
   bool recording = false;
 
-  // HR history for graph
   final List<double> hrHistory = [];
 
   void _addHr(double bpm) {
@@ -63,14 +61,12 @@ class OptimiserState extends ChangeNotifier {
     if (hrHistory.length > 60) hrHistory.removeAt(0);
   }
 
-  // Sensitivity (1–5 bpm)
   double sensitivity = 3.0;
   void setSensitivity(double value) {
     sensitivity = value;
     notifyListeners();
   }
 
-  // Feedback mode
   FeedbackMode feedbackMode = FeedbackMode.haptic;
   void setFeedbackMode(FeedbackMode m) {
     feedbackMode = m;
@@ -78,32 +74,28 @@ class OptimiserState extends ChangeNotifier {
   }
 
   /// =============================================================
-  /// PURE HAPTIC FEEDBACK (SAFE FOR iOS)
+  /// STRONG VIBRATION PATTERNS (BACKGROUND SAFE)
   /// =============================================================
-  void _signalUp() => _vibrateShort();
-  void _signalDown() => _vibrateLong();
 
-  Future<void> _vibrateShort() async {
-    if (await Vibration.hasVibrator() ?? false) {
-      Vibration.vibrate(duration: 150, intensities: [255]);
-    }
+  /// Increase rhythm: short strong buzz
+  Future<void> _signalUp() async {
+    Vibration.vibrate(duration: 120); // short buzz
   }
 
-  Future<void> _vibrateLong() async {
-    if (await Vibration.hasVibrator() ?? false) {
-      Vibration.vibrate(duration: 800, intensities: [255]);
-    }
+  /// Ease rhythm: long strong buzz
+  Future<void> _signalDown() async {
+    Vibration.vibrate(duration: 300); // long buzz
   }
 
   /// =============================================================
-  /// GRADIENT ASCENT LOOP
+  /// GRADIENT LOOP
   /// =============================================================
   Timer? _loopTimer;
 
   DateTime? _lastTestTime;
   bool _testInProgress = false;
   DateTime? _testStartTime;
-  String? _direction; // "up" or "down"
+  String? _direction; // "up" or "down" = direction we currently believe is GOOD
 
   double? _hrBeforeTest;
 
@@ -112,7 +104,6 @@ class OptimiserState extends ChangeNotifier {
 
   String _advice = "Tap ▶ to start workout";
 
-  /// Toggle workout recording
   void toggleRecording() {
     recording = !recording;
 
@@ -147,7 +138,6 @@ class OptimiserState extends ChangeNotifier {
     _loopTimer = null;
   }
 
-  /// HR input from BLE
   void setHr(double bpm) {
     if (bpm <= 0 || bpm.isNaN) return;
     hr = bpm;
@@ -156,15 +146,16 @@ class OptimiserState extends ChangeNotifier {
   }
 
   /// =============================================================
-  /// GRADIENT TICK
+  /// GRADIENT TICK (NOW USES ΔHR DIRECTION)
   /// =============================================================
   void _tick() {
     if (!recording || hr <= 0) return;
 
     final now = DateTime.now();
-    const int interval = 15; // seconds between tests
-    const int delay = 15; // evaluation time after cue
+    const int interval = 15; // seconds between starting tests
+    const int delay = 15; // seconds to wait before reading HR response
 
+    // If we are currently in a test window, wait for evaluation
     if (_testInProgress) {
       if (_testStartTime != null &&
           now.difference(_testStartTime!).inSeconds >= delay) {
@@ -173,31 +164,35 @@ class OptimiserState extends ChangeNotifier {
       return;
     }
 
+    // Enforce minimum time between tests
     if (_lastTestTime != null &&
         now.difference(_lastTestTime!).inSeconds < interval) {
       return;
     }
 
-    // Plateau detection
+    // Plateau detection: hold cadence if HR stays near plateau HR
     if (_plateau && _plateauHr != null) {
       if ((hr - _plateauHr!).abs() < sensitivity) {
         _advice = "Optimal rhythm";
         notifyListeners();
         return;
       }
+      // Environment changed (hill, heat, etc) → fall out of plateau and resume testing
       _plateau = false;
     }
 
-    // Decide direction
-    const double eps = 0.2;
-
-    late String dir;
-
-    // Alternate early to gather initial data
+    // === Direction selection with real gradient logic ===
+    // _direction means "currently best-known good direction"
+    // - First ever test: default to "up"
+    // - After each evaluation:
+    //     - if HR went down → keep same direction
+    //     - if HR went up   → _direction is flipped there,
+    //                         so here we just reuse updated _direction.
+    String dir;
     if (_direction == null) {
-      dir = "up";
+      dir = "up"; // initial probe
     } else {
-      dir = (_direction == "up") ? "down" : "up";
+      dir = _direction!; // keep chasing best direction discovered so far
     }
 
     _startTest(dir);
@@ -205,7 +200,7 @@ class OptimiserState extends ChangeNotifier {
 
   void _startTest(String dir) {
     _testInProgress = true;
-    _direction = dir;
+    _direction = dir; // direction we are testing as "candidate good direction"
     _testStartTime = DateTime.now();
     _lastTestTime = _testStartTime;
 
@@ -229,7 +224,7 @@ class OptimiserState extends ChangeNotifier {
     final delta = hr - _hrBeforeTest!;
     final double plate = sensitivity;
 
-    // Plateau detection
+    // === Plateau detection ===
     if (delta.abs() < plate) {
       _plateau = true;
       _plateauHr = hr;
@@ -238,10 +233,32 @@ class OptimiserState extends ChangeNotifier {
       return;
     }
 
+    // === TRUE GRADIENT DIRECTION LOGIC ===
+    // We just tested _direction:
+    // - If HR went DOWN enough → good direction → keep it
+    // - If HR went UP enough   → bad direction  → flip _direction for next test
+    if (delta < -plate) {
+      // HR dropped meaningfully → current direction is good
+      // Keep _direction as-is so next tick tests same way again.
+      if (_direction == "up") {
+        _advice = "Good response. Slightly higher rhythm is efficient.";
+      } else {
+        _advice = "Good response. Slightly easier rhythm is efficient.";
+      }
+    } else if (delta > plate) {
+      // HR rose meaningfully → current direction is bad → reverse for next test
+      if (_direction == "up") {
+        _direction = "down";
+        _advice = "Too costly. Next I'll ease rhythm.";
+      } else {
+        _direction = "up";
+        _advice = "Too easy. Next I'll increase rhythm.";
+      }
+    }
+
     notifyListeners();
   }
 
-  /// Public getters
   String get rhythmAdvice => recording ? _advice : "Tap ▶ to start workout";
 
   Color get rhythmColor {
@@ -253,12 +270,11 @@ class OptimiserState extends ChangeNotifier {
 }
 
 /// =============================================================
-/// BLE MANAGER (flutter_reactive_ble)
+/// BLE MANAGER
 /// =============================================================
 class BleManager extends ChangeNotifier {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
 
-  // Standard Heart Rate Service + Measurement characteristic
   final Uuid hrService = Uuid.parse("0000180D-0000-1000-8000-00805F9B34FB");
   final Uuid hrMeasurement = Uuid.parse("00002A37-0000-1000-8000-00805F9B34FB");
 
@@ -287,18 +303,17 @@ class BleManager extends ChangeNotifier {
 
     final completer = Completer<List<DiscoveredDevice>>();
 
-    _scanSub = _ble
-        .scanForDevices(
-          withServices: [], // scan all BLE devices
-        )
-        .listen((d) {
-      if (!devices.any((x) => x.id == d.id)) {
-        devices.add(d);
-        notifyListeners();
-      }
-    }, onError: (_) {
-      if (!completer.isCompleted) completer.complete(devices);
-    });
+    _scanSub = _ble.scanForDevices(withServices: []).listen(
+      (d) {
+        if (!devices.any((x) => x.id == d.id)) {
+          devices.add(d);
+          notifyListeners();
+        }
+      },
+      onError: (_) {
+        if (!completer.isCompleted) completer.complete(devices);
+      },
+    );
 
     Future.delayed(timeout, () async {
       await _scanSub?.cancel();
@@ -327,32 +342,38 @@ class BleManager extends ChangeNotifier {
     _connSub?.cancel();
     _hrSub?.cancel();
 
-    _connSub = _ble.connectToDevice(id: id).listen((event) {
-      if (event.connectionState == DeviceConnectionState.connected) {
-        connectedId = id;
-        connectedName = name.isEmpty ? "(unknown)" : name;
-        notifyListeners();
+    _connSub = _ble.connectToDevice(id: id).listen(
+      (event) {
+        if (event.connectionState == DeviceConnectionState.connected) {
+          connectedId = id;
+          connectedName = name.isEmpty ? "(unknown)" : name;
+          notifyListeners();
 
-        final hrChar = QualifiedCharacteristic(
-          deviceId: id,
-          serviceId: hrService,
-          characteristicId: hrMeasurement,
-        );
+          final hrChar = QualifiedCharacteristic(
+            deviceId: id,
+            serviceId: hrService,
+            characteristicId: hrMeasurement,
+          );
 
-        _hrSub = _ble.subscribeToCharacteristic(hrChar).listen((data) {
-          final bpm = _parseHr(data);
-          if (bpm > 0) opt.setHr(bpm.toDouble());
-        });
-      } else if (event.connectionState == DeviceConnectionState.disconnected) {
+          _hrSub = _ble.subscribeToCharacteristic(hrChar).listen(
+            (data) {
+              final bpm = _parseHr(data);
+              if (bpm > 0) opt.setHr(bpm.toDouble());
+            },
+          );
+        } else if (event.connectionState ==
+            DeviceConnectionState.disconnected) {
+          connectedId = null;
+          connectedName = null;
+          notifyListeners();
+        }
+      },
+      onError: (_) {
         connectedId = null;
         connectedName = null;
         notifyListeners();
-      }
-    }, onError: (_) {
-      connectedId = null;
-      connectedName = null;
-      notifyListeners();
-    });
+      },
+    );
   }
 
   Future<void> disconnect() async {
@@ -412,8 +433,6 @@ class OptimiserDashboard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text("HR: ${opt.hr.toStringAsFixed(0)} bpm"),
-
-          /// Sensitivity selector
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -433,8 +452,6 @@ class OptimiserDashboard extends StatelessWidget {
               ),
             ],
           ),
-
-          /// Feedback mode
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -453,11 +470,9 @@ class OptimiserDashboard extends StatelessWidget {
               ),
             ],
           ),
-
           const SizedBox(height: 10),
           SizedBox(height: 200, child: HrGraph(opt: opt)),
           const SizedBox(height: 10),
-
           if (ble.connectedName != null)
             Text(
               "Connected to: ${ble.connectedName}",
@@ -541,7 +556,6 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
               ],
             ),
             const SizedBox(height: 12),
-
             Flexible(
               child: devices.isEmpty
                   ? const Text(
@@ -568,9 +582,7 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
                       },
                     ),
             ),
-
             const SizedBox(height: 10),
-
             Row(
               children: [
                 TextButton.icon(
@@ -593,7 +605,7 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
 }
 
 /// =============================================================
-/// HR GRAPH WIDGET (FIXED maxX TYPE)
+/// HR GRAPH WIDGET
 /// =============================================================
 class HrGraph extends StatelessWidget {
   final OptimiserState opt;
@@ -626,9 +638,7 @@ class HrGraph extends StatelessWidget {
       if (maxY < minY + 10) maxY = minY + 10;
     }
 
-    // FIXED: Ensure correct double type
-    final double maxX =
-        points.isEmpty ? 1.0 : (points.length - 1).toDouble();
+    final maxX = points.isEmpty ? 1.0 : (points.length - 1).toDouble();
 
     return LineChart(
       LineChartData(
