@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:vibration/vibration.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 /// =============================================================
-/// SIMPLE IN-MEMORY LOG BUFFER
+/// SIMPLE IN-MEMORY LOG BUFFER (+ SAVE TO FILE ADDED)
 /// =============================================================
 class LogBuffer {
   static final List<String> _lines = [];
@@ -15,7 +19,6 @@ class LogBuffer {
   static void add(String event, String details) {
     final ts = DateTime.now().toIso8601String();
     _lines.add("$ts | $event | $details");
-    // For debugging:
     print("$ts | $event | $details");
   }
 
@@ -23,6 +26,19 @@ class LogBuffer {
       _lines.isEmpty ? "No logs yet." : _lines.join("\n");
 
   static void clear() => _lines.clear();
+
+  /// ✅ NEW: save logs to file
+  static Future<File?> saveToFile() async {
+    if (_lines.isEmpty) return null;
+
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File(
+      "${dir.path}/itknows_log_${DateTime.now().millisecondsSinceEpoch}.txt",
+    );
+
+    await file.writeAsString(all);
+    return file;
+  }
 }
 
 /// =============================================================
@@ -63,7 +79,7 @@ class MyApp extends StatelessWidget {
 enum FeedbackMode { haptic }
 
 /// =============================================================
-/// OPTIMISER STATE (LOGGING ADDED, LOGIC UNCHANGED)
+/// OPTIMISER STATE (UNCHANGED)
 /// =============================================================
 class OptimiserState extends ChangeNotifier {
   double hr = 0;
@@ -75,7 +91,7 @@ class OptimiserState extends ChangeNotifier {
     if (hrHistory.length > 60) hrHistory.removeAt(0);
   }
 
-  double sensitivity = 3.0; // DROPDOWN restored
+  double sensitivity = 3.0;
   void setSensitivity(double value) {
     sensitivity = value;
     notifyListeners();
@@ -87,11 +103,9 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Logging wrapper
   void _log(String event, String details) =>
       LogBuffer.add(event, details);
 
-  // Haptics
   Future<bool> _canVibrate() async =>
       await Vibration.hasVibrator() ?? false;
 
@@ -103,7 +117,6 @@ class OptimiserState extends ChangeNotifier {
     if (await _canVibrate()) Vibration.vibrate(duration: 300);
   }
 
-  // Optimiser state
   Timer? _loopTimer;
 
   DateTime? _lastTestTime;
@@ -162,7 +175,6 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Main optimiser loop
   void _tick() {
     if (!recording || hr <= 0) return;
 
@@ -191,14 +203,13 @@ class OptimiserState extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      _plateau = false; // drift broke plateau
+      _plateau = false;
     }
 
     final dir = _direction ?? "up";
     _startTest(dir);
   }
 
-  // Start perturbation
   void _startTest(String dir) {
     _testInProgress = true;
     _direction = dir;
@@ -220,7 +231,6 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Evaluate perturbation
   void _evaluateTest() {
     _testInProgress = false;
 
@@ -232,7 +242,6 @@ class OptimiserState extends ChangeNotifier {
     _log("EVAL",
         "dir=$_direction before=$_hrBeforeTest now=$hr delta=$delta");
 
-    // Plateau
     if (delta.abs() < thr) {
       _plateau = true;
       _plateauHr = hr;
@@ -242,16 +251,12 @@ class OptimiserState extends ChangeNotifier {
       return;
     }
 
-    // Good direction
     if (delta < -thr) {
       _log("GOOD", "dir=$_direction delta=$delta");
       _advice = _direction == "up"
           ? "Good response. Slightly higher rhythm is efficient."
           : "Good response. Slightly easier rhythm is efficient.";
-    }
-
-    // Bad direction flip
-    else if (delta > thr) {
+    } else if (delta > thr) {
       final old = _direction;
       _direction = old == "up" ? "down" : "up";
 
@@ -265,7 +270,6 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // UI getters
   String get rhythmAdvice =>
       recording ? _advice : "Tap ▶ to start workout";
 
@@ -391,7 +395,7 @@ class BleManager extends ChangeNotifier {
 }
 
 /// =============================================================
-/// MAIN DASHBOARD — SENSITIVITY DROPDOWN RESTORED
+/// MAIN DASHBOARD (UNCHANGED)
 /// =============================================================
 class OptimiserDashboard extends StatelessWidget {
   const OptimiserDashboard({super.key});
@@ -423,12 +427,9 @@ class OptimiserDashboard extends StatelessWidget {
           )
         ],
       ),
-
       body: Column(
         children: [
           const SizedBox(height: 20),
-
-          /// ADVICE
           Text(
             opt.rhythmAdvice,
             style: TextStyle(
@@ -438,15 +439,8 @@ class OptimiserDashboard extends StatelessWidget {
             ),
             textAlign: TextAlign.center,
           ),
-
           const SizedBox(height: 10),
-
-          /// HR DISPLAY
           Text("HR: ${opt.hr.toStringAsFixed(0)} bpm"),
-
-          /// ==========================
-          /// 🔥 SENSITIVITY DROPDOWN (RESTORED)
-          /// ==========================
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -466,8 +460,6 @@ class OptimiserDashboard extends StatelessWidget {
               ),
             ],
           ),
-
-          /// FEEDBACK MODE
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -486,20 +478,14 @@ class OptimiserDashboard extends StatelessWidget {
               ),
             ],
           ),
-
           const SizedBox(height: 10),
-
-          /// HR GRAPH
           SizedBox(height: 200, child: HrGraph(opt: opt)),
-
           const SizedBox(height: 10),
-
           if (ble.connectedName != null)
             Text("Connected to: ${ble.connectedName}",
                 style: const TextStyle(color: Colors.black54)),
         ],
       ),
-
       floatingActionButton: FloatingActionButton(
         backgroundColor: opt.recording ? Colors.red : Colors.green,
         child: Icon(opt.recording ? Icons.stop : Icons.play_arrow),
@@ -521,7 +507,7 @@ class OptimiserDashboard extends StatelessWidget {
 }
 
 /// =============================================================
-/// RAW LOG VIEWER
+/// RAW LOG VIEWER (+ SAVE BUTTON ADDED)
 /// =============================================================
 class LogViewerPage extends StatelessWidget {
   const LogViewerPage({super.key});
@@ -535,19 +521,34 @@ class LogViewerPage extends StatelessWidget {
         title: const Text("Session Logs"),
         actions: [
           IconButton(
+            icon: const Icon(Icons.save_alt),
+            tooltip: "Save logs",
+            onPressed: () async {
+              final file = await LogBuffer.saveToFile();
+              if (file != null) {
+                await Share.shareXFiles(
+                  [XFile(file.path)],
+                  text: "ItKnows session log",
+                );
+              }
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.delete),
             tooltip: "Clear logs",
             onPressed: () {
               LogBuffer.clear();
               Navigator.pop(context);
             },
-          )
+          ),
         ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        child: Text(text,
-            style: const TextStyle(fontFamily: "monospace", fontSize: 12)),
+        child: Text(
+          text,
+          style: const TextStyle(fontFamily: "monospace", fontSize: 12),
+        ),
       ),
     );
   }
@@ -593,8 +594,6 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
                   const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
-
-            /// List view
             Flexible(
               child: devices.isEmpty
                   ? const Text(
@@ -620,7 +619,6 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
                       },
                     ),
             ),
-
             TextButton(
               onPressed: _startScan,
               child: const Text("Rescan"),
@@ -633,7 +631,7 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
 }
 
 /// =============================================================
-/// HR GRAPH WIDGET (UNCHANGED)
+/// HR GRAPH (UNCHANGED)
 /// =============================================================
 class HrGraph extends StatelessWidget {
   final OptimiserState opt;
