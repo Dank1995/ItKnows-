@@ -27,7 +27,6 @@ class LogBuffer {
 
   static void clear() => _lines.clear();
 
-  /// ✅ NEW: save logs to file
   static Future<File?> saveToFile() async {
     if (_lines.isEmpty) return null;
 
@@ -79,7 +78,7 @@ class MyApp extends StatelessWidget {
 enum FeedbackMode { haptic }
 
 /// =============================================================
-/// OPTIMISER STATE (UNCHANGED)
+/// OPTIMISER STATE (LOGIC UNCHANGED — TEXT ONLY UPDATED)
 /// =============================================================
 class OptimiserState extends ChangeNotifier {
   double hr = 0;
@@ -124,7 +123,6 @@ class OptimiserState extends ChangeNotifier {
   DateTime? _testStartTime;
 
   String? _direction;
-
   double? _hrBeforeTest;
 
   bool _plateau = false;
@@ -138,7 +136,7 @@ class OptimiserState extends ChangeNotifier {
     if (recording) {
       _reset();
       _startLoop();
-      _advice = "Learning rhythm...";
+      _advice = "Learning cadence...";
       _log("START", "recording started");
     } else {
       _stopLoop();
@@ -199,7 +197,7 @@ class OptimiserState extends ChangeNotifier {
 
     if (_plateau && _plateauHr != null) {
       if ((hr - _plateauHr!).abs() < sensitivity) {
-        _advice = "Optimal rhythm";
+        _advice = "Optimal cadence";
         notifyListeners();
         return;
       }
@@ -221,10 +219,10 @@ class OptimiserState extends ChangeNotifier {
     _log("TEST_START", "dir=$dir hrBefore=$_hrBeforeTest");
 
     if (dir == "up") {
-      _advice = "Increase rhythm";
+      _advice = "Increase cadence";
       _signalUp();
     } else {
-      _advice = "Ease rhythm";
+      _advice = "Ease cadence";
       _signalDown();
     }
 
@@ -245,7 +243,7 @@ class OptimiserState extends ChangeNotifier {
     if (delta.abs() < thr) {
       _plateau = true;
       _plateauHr = hr;
-      _advice = "Optimal rhythm";
+      _advice = "Optimal cadence";
       _log("PLATEAU", "hr=$hr thresh=$thr");
       notifyListeners();
       return;
@@ -254,8 +252,8 @@ class OptimiserState extends ChangeNotifier {
     if (delta < -thr) {
       _log("GOOD", "dir=$_direction delta=$delta");
       _advice = _direction == "up"
-          ? "Good response. Slightly higher rhythm is efficient."
-          : "Good response. Slightly easier rhythm is efficient.";
+          ? "Good response. Slightly higher cadence is efficient."
+          : "Good response. Slightly easier cadence is efficient.";
     } else if (delta > thr) {
       final old = _direction;
       _direction = old == "up" ? "down" : "up";
@@ -263,8 +261,8 @@ class OptimiserState extends ChangeNotifier {
       _log("BAD_FLIP", "old=$old new=$_direction delta=$delta");
 
       _advice = old == "up"
-          ? "Too costly. Next I'll ease rhythm."
-          : "Too easy. Next I'll increase rhythm.";
+          ? "Too costly. Next I'll ease cadence."
+          : "Too easy. Next I'll increase cadence.";
     }
 
     notifyListeners();
@@ -275,8 +273,8 @@ class OptimiserState extends ChangeNotifier {
 
   Color get rhythmColor {
     if (!recording) return Colors.grey;
-    if (_advice == "Optimal rhythm") return Colors.green;
-    if (_advice == "Learning rhythm...") return Colors.grey;
+    if (_advice == "Optimal cadence") return Colors.green;
+    if (_advice == "Learning cadence...") return Colors.grey;
     return Colors.orange;
   }
 
@@ -395,7 +393,7 @@ class BleManager extends ChangeNotifier {
 }
 
 /// =============================================================
-/// MAIN DASHBOARD (UNCHANGED)
+/// MAIN DASHBOARD
 /// =============================================================
 class OptimiserDashboard extends StatelessWidget {
   const OptimiserDashboard({super.key});
@@ -507,7 +505,7 @@ class OptimiserDashboard extends StatelessWidget {
 }
 
 /// =============================================================
-/// RAW LOG VIEWER (+ SAVE BUTTON ADDED)
+/// RAW LOG VIEWER
 /// =============================================================
 class LogViewerPage extends StatelessWidget {
   const LogViewerPage({super.key});
@@ -555,7 +553,7 @@ class LogViewerPage extends StatelessWidget {
 }
 
 /// =============================================================
-/// BLE DEVICE PICKER (UNCHANGED)
+/// BLE DEVICE PICKER
 /// =============================================================
 class _BleBottomSheet extends StatefulWidget {
   const _BleBottomSheet();
@@ -631,7 +629,7 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
 }
 
 /// =============================================================
-/// HR GRAPH (UNCHANGED)
+/// HR GRAPH
 /// =============================================================
 class HrGraph extends StatelessWidget {
   final OptimiserState opt;
