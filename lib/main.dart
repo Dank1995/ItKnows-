@@ -22,8 +22,7 @@ class LogBuffer {
     print("$ts | $event | $details");
   }
 
-  static String get all =>
-      _lines.isEmpty ? "No logs yet." : _lines.join("\n");
+  static String get all => _lines.isEmpty ? "No logs yet." : _lines.join("\n");
 
   static void clear() => _lines.clear();
 
@@ -78,7 +77,7 @@ class MyApp extends StatelessWidget {
 enum FeedbackMode { haptic }
 
 /// =============================================================
-/// OPTIMISER STATE (LOGIC UNCHANGED — TEXT ONLY UPDATED)
+/// OPTIMISER STATE (AUTO THRESHOLD ADDED, CORE LOGIC UNCHANGED)
 /// =============================================================
 class OptimiserState extends ChangeNotifier {
   double hr = 0;
@@ -88,10 +87,22 @@ class OptimiserState extends ChangeNotifier {
   void _addHr(double bpm) {
     hrHistory.add(bpm);
     if (hrHistory.length > 60) hrHistory.removeAt(0);
+
+    // ✅ NEW: 30s HR window for auto-threshold
+    _hrWindow30s.add(bpm);
+    if (_hrWindow30s.length > 30) _hrWindow30s.removeAt(0);
   }
 
-  double sensitivity = 3.0;
+  /// =========================
+  /// ✅ AUTO THRESHOLD STATE
+  /// =========================
+  final List<double> _hrWindow30s = [];
+  DateTime? _lastThresholdUpdate;
+
+  double sensitivity = 3.0; // now auto-controlled (1..5)
+
   void setSensitivity(double value) {
+    // kept for compatibility / debug, but UI removed for release
     sensitivity = value;
     notifyListeners();
   }
@@ -102,11 +113,9 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _log(String event, String details) =>
-      LogBuffer.add(event, details);
+  void _log(String event, String details) => LogBuffer.add(event, details);
 
-  Future<bool> _canVibrate() async =>
-      await Vibration.hasVibrator() ?? false;
+  Future<bool> _canVibrate() async => await Vibration.hasVibrator() ?? false;
 
   Future<void> _signalUp() async {
     if (await _canVibrate()) Vibration.vibrate(duration: 120);
@@ -154,6 +163,13 @@ class OptimiserState extends ChangeNotifier {
     _testStartTime = null;
     _direction = null;
     _hrBeforeTest = null;
+
+    // ✅ NEW: clear auto-threshold window
+    _hrWindow30s.clear();
+    _lastThresholdUpdate = null;
+
+    // optional: reset to middle
+    sensitivity = 3.0;
   }
 
   void _startLoop() {
@@ -173,11 +189,62 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// =============================================================
+  /// ✅ AUTO THRESHOLD UPDATE (range-based, 30s window, every ~10s, ±1 step)
+  /// =============================================================
+  void _updateAutoThreshold() {
+    final now = DateTime.now();
+
+    if (_lastThresholdUpdate != null &&
+        now.difference(_lastThresholdUpdate!).inSeconds < 10) {
+      return;
+    }
+    _lastThresholdUpdate = now;
+
+    // need enough samples to be meaningful
+    if (_hrWindow30s.length < 10) return;
+
+    final minHr = _hrWindow30s.reduce((a, b) => a < b ? a : b);
+    final maxHr = _hrWindow30s.reduce((a, b) => a > b ? a : b);
+    final range = maxHr - minHr;
+
+    int target;
+    if (range <= 2) {
+      target = 1;
+    } else if (range <= 4) {
+      target = 2;
+    } else if (range <= 6) {
+      target = 3;
+    } else if (range <= 8) {
+      target = 4;
+    } else {
+      target = 5;
+    }
+
+    final old = sensitivity.round();
+
+    // rate limit: ±1 step per update
+    int next = old;
+    if (target > old) next = old + 1;
+    if (target < old) next = old - 1;
+
+    if (next != old) {
+      sensitivity = next.toDouble();
+      _log("AUTO_THR",
+          "range=${range.toStringAsFixed(1)} old=$old new=$next");
+    }
+  }
+
+  /// =============================================================
+  /// Main optimiser loop (UNCHANGED logic; auto-threshold call added only)
+  /// =============================================================
   void _tick() {
     if (!recording || hr <= 0) return;
 
-    _log("TICK",
-        "hr=$hr testInProg=$_testInProgress plateau=$_plateau");
+    // ✅ NEW: auto-threshold update (does not change optimiser logic, only thr value)
+    _updateAutoThreshold();
+
+    _log("TICK", "hr=$hr testInProg=$_testInProgress plateau=$_plateau");
 
     final now = DateTime.now();
     const interval = 15;
@@ -237,8 +304,7 @@ class OptimiserState extends ChangeNotifier {
     final delta = hr - _hrBeforeTest!;
     final thr = sensitivity;
 
-    _log("EVAL",
-        "dir=$_direction before=$_hrBeforeTest now=$hr delta=$delta");
+    _log("EVAL", "dir=$_direction before=$_hrBeforeTest now=$hr delta=$delta");
 
     if (delta.abs() < thr) {
       _plateau = true;
@@ -268,8 +334,7 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  String get rhythmAdvice =>
-      recording ? _advice : "Tap ▶ to start workout";
+  String get rhythmAdvice => recording ? _advice : "Tap ▶ to start workout";
 
   Color get rhythmColor {
     if (!recording) return Colors.grey;
@@ -291,10 +356,8 @@ class OptimiserState extends ChangeNotifier {
 class BleManager extends ChangeNotifier {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
 
-  final Uuid hrService =
-      Uuid.parse("0000180D-0000-1000-8000-00805F9B34FB");
-  final Uuid hrMeasurement =
-      Uuid.parse("00002A37-0000-1000-8000-00805F9B34FB");
+  final Uuid hrService = Uuid.parse("0000180D-0000-1000-8000-00805F9B34FB");
+  final Uuid hrMeasurement = Uuid.parse("00002A37-0000-1000-8000-00805F9B34FB");
 
   StreamSubscription<DiscoveredDevice>? _scanSub;
   StreamSubscription<ConnectionStateUpdate>? _connSub;
@@ -349,18 +412,14 @@ class BleManager extends ChangeNotifier {
     }
   }
 
-  Future<void> connect(
-      String id, String name, OptimiserState opt) async {
+  Future<void> connect(String id, String name, OptimiserState opt) async {
     _connSub?.cancel();
     _hrSub?.cancel();
 
-    _connSub =
-        _ble.connectToDevice(id: id).listen((event) {
-      if (event.connectionState ==
-          DeviceConnectionState.connected) {
+    _connSub = _ble.connectToDevice(id: id).listen((event) {
+      if (event.connectionState == DeviceConnectionState.connected) {
         connectedId = id;
-        connectedName =
-            name.isEmpty ? "(unknown)" : name;
+        connectedName = name.isEmpty ? "(unknown)" : name;
         notifyListeners();
 
         final hrChar = QualifiedCharacteristic(
@@ -369,13 +428,11 @@ class BleManager extends ChangeNotifier {
           characteristicId: hrMeasurement,
         );
 
-        _hrSub = _ble.subscribeToCharacteristic(hrChar)
-            .listen((data) {
+        _hrSub = _ble.subscribeToCharacteristic(hrChar).listen((data) {
           final bpm = _parseHr(data);
           if (bpm > 0) opt.setHr(bpm.toDouble());
         });
-      } else if (event.connectionState ==
-          DeviceConnectionState.disconnected) {
+      } else if (event.connectionState == DeviceConnectionState.disconnected) {
         connectedId = null;
         connectedName = null;
         notifyListeners();
@@ -393,7 +450,7 @@ class BleManager extends ChangeNotifier {
 }
 
 /// =============================================================
-/// MAIN DASHBOARD
+/// MAIN DASHBOARD (Sensitivity dropdown REMOVED)
 /// =============================================================
 class OptimiserDashboard extends StatelessWidget {
   const OptimiserDashboard({super.key});
@@ -407,9 +464,7 @@ class OptimiserDashboard extends StatelessWidget {
       appBar: AppBar(
         leading: IconButton(
           icon: Icon(
-            ble.connectedId == null
-                ? Icons.bluetooth
-                : Icons.bluetooth_connected,
+            ble.connectedId == null ? Icons.bluetooth : Icons.bluetooth_connected,
           ),
           onPressed: () => _openBleSheet(context),
         ),
@@ -439,25 +494,9 @@ class OptimiserDashboard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text("HR: ${opt.hr.toStringAsFixed(0)} bpm"),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text("Sensitivity: "),
-              DropdownButton<double>(
-                value: opt.sensitivity,
-                items: const [
-                  DropdownMenuItem(value: 1.0, child: Text("1 bpm")),
-                  DropdownMenuItem(value: 2.0, child: Text("2 bpm")),
-                  DropdownMenuItem(value: 3.0, child: Text("3 bpm")),
-                  DropdownMenuItem(value: 4.0, child: Text("4 bpm")),
-                  DropdownMenuItem(value: 5.0, child: Text("5 bpm")),
-                ],
-                onChanged: (v) {
-                  if (v != null) opt.setSensitivity(v);
-                },
-              ),
-            ],
-          ),
+
+          // ✅ Sensitivity dropdown removed (per your request)
+
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -480,8 +519,10 @@ class OptimiserDashboard extends StatelessWidget {
           SizedBox(height: 200, child: HrGraph(opt: opt)),
           const SizedBox(height: 10),
           if (ble.connectedName != null)
-            Text("Connected to: ${ble.connectedName}",
-                style: const TextStyle(color: Colors.black54)),
+            Text(
+              "Connected to: ${ble.connectedName}",
+              style: const TextStyle(color: Colors.black54),
+            ),
         ],
       ),
       floatingActionButton: FloatingActionButton(
@@ -505,7 +546,7 @@ class OptimiserDashboard extends StatelessWidget {
 }
 
 /// =============================================================
-/// RAW LOG VIEWER
+/// RAW LOG VIEWER (+ SAVE BUTTON)
 /// =============================================================
 class LogViewerPage extends StatelessWidget {
   const LogViewerPage({super.key});
@@ -553,7 +594,7 @@ class LogViewerPage extends StatelessWidget {
 }
 
 /// =============================================================
-/// BLE DEVICE PICKER
+/// BLE DEVICE PICKER (UNCHANGED)
 /// =============================================================
 class _BleBottomSheet extends StatefulWidget {
   const _BleBottomSheet();
@@ -588,8 +629,7 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
           children: [
             Text(
               ble.scanning ? "Scanning…" : "Bluetooth Devices",
-              style:
-                  const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             Flexible(
@@ -602,8 +642,7 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
                       itemCount: devices.length,
                       itemBuilder: (_, i) {
                         final d = devices[i];
-                        final name =
-                            d.name.isNotEmpty ? d.name : "(unknown)";
+                        final name = d.name.isNotEmpty ? d.name : "(unknown)";
                         return ListTile(
                           leading: const Icon(Icons.watch),
                           title: Text(name),
@@ -629,7 +668,7 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
 }
 
 /// =============================================================
-/// HR GRAPH
+/// HR GRAPH (UNCHANGED)
 /// =============================================================
 class HrGraph extends StatelessWidget {
   final OptimiserState opt;
@@ -657,8 +696,7 @@ class HrGraph extends StatelessWidget {
       maxY = maxVal + 5;
     }
 
-    final maxX =
-        points.isEmpty ? 1.0 : (points.length - 1).toDouble();
+    final maxX = points.isEmpty ? 1.0 : (points.length - 1).toDouble();
 
     return LineChart(
       LineChartData(
