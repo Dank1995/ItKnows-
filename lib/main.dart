@@ -58,8 +58,49 @@ void main() {
   );
 }
 
-class MyApp extends StatelessWidget {
+/// =============================================================
+/// APP ROOT  (CHANGED: Stateful + lifecycle observer added)
+/// =============================================================
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+/// ✅ NEW: Lifecycle observer
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// ✅ NEW: on resume → if recording, ensure optimiser loop running + ensure BLE reconnect
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      try {
+        final opt = context.read<OptimiserState>();
+        final ble = context.read<BleManager>();
+
+        if (opt.recording) {
+          opt.ensureLoopRunning(); // restart timer if it was paused/suspended
+          ble.ensureReconnected(opt); // reconnect if iOS dropped BLE
+          LogBuffer.add("LIFECYCLE", "resumed -> auto recover");
+        }
+      } catch (_) {
+        // ignore if context not ready
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -72,7 +113,7 @@ class MyApp extends StatelessWidget {
 }
 
 /// =============================================================
-/// FEEDBACK MODE
+/// FEEDBACK MODE (kept, but dropdown removed from dash)
 /// =============================================================
 enum FeedbackMode { haptic }
 
@@ -88,7 +129,7 @@ class OptimiserState extends ChangeNotifier {
     hrHistory.add(bpm);
     if (hrHistory.length > 60) hrHistory.removeAt(0);
 
-    // ✅ NEW: 30s HR window for auto-threshold
+    // ✅ 30s HR window for auto-threshold
     _hrWindow30s.add(bpm);
     if (_hrWindow30s.length > 30) _hrWindow30s.removeAt(0);
   }
@@ -102,7 +143,7 @@ class OptimiserState extends ChangeNotifier {
   double sensitivity = 3.0; // now auto-controlled (1..5)
 
   void setSensitivity(double value) {
-    // kept for compatibility / debug, but UI removed for release
+    // kept for compatibility / debug, UI removed
     sensitivity = value;
     notifyListeners();
   }
@@ -113,15 +154,24 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// ✅ NEW: Vibration ON/OFF switch (does not change optimiser logic)
+  bool hapticsEnabled = true;
+  void setHapticsEnabled(bool v) {
+    hapticsEnabled = v;
+    notifyListeners();
+  }
+
   void _log(String event, String details) => LogBuffer.add(event, details);
 
   Future<bool> _canVibrate() async => await Vibration.hasVibrator() ?? false;
 
   Future<void> _signalUp() async {
+    if (!hapticsEnabled) return; // ✅ NEW: gate haptics
     if (await _canVibrate()) Vibration.vibrate(duration: 120);
   }
 
   Future<void> _signalDown() async {
+    if (!hapticsEnabled) return; // ✅ NEW: gate haptics
     if (await _canVibrate()) Vibration.vibrate(duration: 300);
   }
 
@@ -155,6 +205,14 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// ✅ NEW: called on lifecycle resume to ensure loop restarts if OS paused timers
+  void ensureLoopRunning() {
+    if (recording && _loopTimer == null) {
+      _startLoop();
+      _log("RECOVER", "loop restarted on resume");
+    }
+  }
+
   void _reset() {
     _plateau = false;
     _plateauHr = null;
@@ -164,7 +222,7 @@ class OptimiserState extends ChangeNotifier {
     _direction = null;
     _hrBeforeTest = null;
 
-    // ✅ NEW: clear auto-threshold window
+    // clear auto-threshold window
     _hrWindow30s.clear();
     _lastThresholdUpdate = null;
 
@@ -230,8 +288,7 @@ class OptimiserState extends ChangeNotifier {
 
     if (next != old) {
       sensitivity = next.toDouble();
-      _log("AUTO_THR",
-          "range=${range.toStringAsFixed(1)} old=$old new=$next");
+      _log("AUTO_THR", "range=${range.toStringAsFixed(1)} old=$old new=$next");
     }
   }
 
@@ -241,7 +298,7 @@ class OptimiserState extends ChangeNotifier {
   void _tick() {
     if (!recording || hr <= 0) return;
 
-    // ✅ NEW: auto-threshold update (does not change optimiser logic, only thr value)
+    // auto-threshold update (only changes thr value)
     _updateAutoThreshold();
 
     _log("TICK", "hr=$hr testInProg=$_testInProgress plateau=$_plateau");
@@ -351,13 +408,14 @@ class OptimiserState extends ChangeNotifier {
 }
 
 /// =============================================================
-/// BLE MANAGER (UNCHANGED)
+/// BLE MANAGER (AUTO-RECONNECT ADDED, UI + scan unchanged)
 /// =============================================================
 class BleManager extends ChangeNotifier {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
 
   final Uuid hrService = Uuid.parse("0000180D-0000-1000-8000-00805F9B34FB");
-  final Uuid hrMeasurement = Uuid.parse("00002A37-0000-1000-8000-00805F9B34FB");
+  final Uuid hrMeasurement =
+      Uuid.parse("00002A37-0000-1000-8000-00805F9B34FB");
 
   StreamSubscription<DiscoveredDevice>? _scanSub;
   StreamSubscription<ConnectionStateUpdate>? _connSub;
@@ -366,6 +424,13 @@ class BleManager extends ChangeNotifier {
   String? connectedId;
   String? connectedName;
   bool scanning = false;
+
+  /// ✅ NEW: remember last device so we can reconnect even if iOS drops connection
+  String? _lastDeviceId;
+  String? _lastDeviceName;
+
+  /// ✅ NEW: prevent spam reconnect attempts
+  DateTime? _lastReconnectAttempt;
 
   Future<void> ensurePermissions() async {
     await Permission.bluetoothScan.request();
@@ -416,6 +481,10 @@ class BleManager extends ChangeNotifier {
     _connSub?.cancel();
     _hrSub?.cancel();
 
+    // ✅ NEW: remember last device for auto-reconnect
+    _lastDeviceId = id;
+    _lastDeviceName = name;
+
     _connSub = _ble.connectToDevice(id: id).listen((event) {
       if (event.connectionState == DeviceConnectionState.connected) {
         connectedId = id;
@@ -440,6 +509,27 @@ class BleManager extends ChangeNotifier {
     });
   }
 
+  /// ✅ NEW: called on lifecycle resume to reconnect automatically
+  void ensureReconnected(OptimiserState opt) {
+    final now = DateTime.now();
+
+    // if already connected, do nothing
+    if (connectedId != null) return;
+
+    // if we don't know what to reconnect to, do nothing
+    if (_lastDeviceId == null) return;
+
+    // rate limit reconnect attempts
+    if (_lastReconnectAttempt != null &&
+        now.difference(_lastReconnectAttempt!).inSeconds < 3) {
+      return;
+    }
+    _lastReconnectAttempt = now;
+
+    LogBuffer.add("BLE", "auto reconnect attempt to $_lastDeviceName");
+    connect(_lastDeviceId!, _lastDeviceName ?? "", opt);
+  }
+
   Future<void> disconnect() async {
     await _hrSub?.cancel();
     await _connSub?.cancel();
@@ -450,7 +540,7 @@ class BleManager extends ChangeNotifier {
 }
 
 /// =============================================================
-/// MAIN DASHBOARD (Sensitivity dropdown REMOVED)
+/// MAIN DASHBOARD (Sensitivity dropdown removed already, Haptic dropdown removed now)
 /// =============================================================
 class OptimiserDashboard extends StatelessWidget {
   const OptimiserDashboard({super.key});
@@ -495,26 +585,18 @@ class OptimiserDashboard extends StatelessWidget {
           const SizedBox(height: 10),
           Text("HR: ${opt.hr.toStringAsFixed(0)} bpm"),
 
-          // ✅ Sensitivity dropdown removed (per your request)
-
+          /// ✅ NEW: Vibration ON/OFF switch (replaces dropdown request)
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Text("Feedback: "),
-              DropdownButton<FeedbackMode>(
-                value: opt.feedbackMode,
-                items: const [
-                  DropdownMenuItem(
-                    value: FeedbackMode.haptic,
-                    child: Text("Haptic"),
-                  ),
-                ],
-                onChanged: (v) {
-                  if (v != null) opt.setFeedbackMode(v);
-                },
+              const Text("Vibration cues: "),
+              Switch(
+                value: opt.hapticsEnabled,
+                onChanged: (v) => opt.setHapticsEnabled(v),
               ),
             ],
           ),
+
           const SizedBox(height: 10),
           SizedBox(height: 200, child: HrGraph(opt: opt)),
           const SizedBox(height: 10),
