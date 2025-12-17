@@ -1,6 +1,6 @@
 name: itknows
 description: A real-time adaptive metabolic and physiological optimisation app.
-version: 1.0.0+219
+version: 1.0.0+221
 
 environment:
   sdk: ">=3.1.0 <4.0.0"
@@ -9,8 +9,6 @@ dependencies:
   flutter:
     sdk: flutter
 
-  path_provider: ^2.1.2
-  share_plus: ^10.0.0
   provider: ^6.1.5
   fl_chart: ^0.69.0
   flutter_reactive_ble: ^5.0.2
@@ -31,7 +29,3 @@ flutter:
   assets:
     - assets/icon.png
 
-flutter_icons:
-  android: true
-  ios: true
-  image_path: "assets/icon.png"
