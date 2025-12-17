@@ -11,7 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 /// =============================================================
-/// SIMPLE IN-MEMORY LOG BUFFER (+ SAVE TO FILE ADDED)
+/// SIMPLE IN-MEMORY LOG BUFFER (+ SAVE TO FILE)
 /// =============================================================
 class LogBuffer {
   static final List<String> _lines = [];
@@ -22,18 +22,17 @@ class LogBuffer {
     print("$ts | $event | $details");
   }
 
-  static String get all => _lines.isEmpty ? "No logs yet." : _lines.join("\n");
+  static String get all =>
+      _lines.isEmpty ? "No logs yet." : _lines.join("\n");
 
   static void clear() => _lines.clear();
 
   static Future<File?> saveToFile() async {
     if (_lines.isEmpty) return null;
-
     final dir = await getApplicationDocumentsDirectory();
     final file = File(
       "${dir.path}/itknows_log_${DateTime.now().millisecondsSinceEpoch}.txt",
     );
-
     await file.writeAsString(all);
     return file;
   }
@@ -59,47 +58,10 @@ void main() {
 }
 
 /// =============================================================
-/// APP ROOT  (CHANGED: Stateful + lifecycle observer added)
+/// APP ROOT (NO LIFECYCLE OBSERVER)
 /// =============================================================
-class MyApp extends StatefulWidget {
+class MyApp extends StatelessWidget {
   const MyApp({super.key});
-
-  @override
-  State<MyApp> createState() => _MyAppState();
-}
-
-/// ✅ NEW: Lifecycle observer
-class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  /// ✅ NEW: on resume → if recording, ensure optimiser loop running + ensure BLE reconnect
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      try {
-        final opt = context.read<OptimiserState>();
-        final ble = context.read<BleManager>();
-
-        if (opt.recording) {
-          opt.ensureLoopRunning(); // restart timer if it was paused/suspended
-          ble.ensureReconnected(opt); // reconnect if iOS dropped BLE
-          LogBuffer.add("LIFECYCLE", "resumed -> auto recover");
-        }
-      } catch (_) {
-        // ignore if context not ready
-      }
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -113,66 +75,24 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 }
 
 /// =============================================================
-/// FEEDBACK MODE (kept, but dropdown removed from dash)
-/// =============================================================
-enum FeedbackMode { haptic }
-
-/// =============================================================
-/// OPTIMISER STATE (AUTO THRESHOLD ADDED, CORE LOGIC UNCHANGED)
+/// OPTIMISER STATE (IDENTICAL CONTROL SYSTEM, 2 BPM FIXED)
 /// =============================================================
 class OptimiserState extends ChangeNotifier {
   double hr = 0;
   bool recording = false;
 
+  static const double sensitivity = 2.0;
+
   final List<double> hrHistory = [];
   void _addHr(double bpm) {
     hrHistory.add(bpm);
     if (hrHistory.length > 60) hrHistory.removeAt(0);
-
-    // ✅ 30s HR window for auto-threshold
-    _hrWindow30s.add(bpm);
-    if (_hrWindow30s.length > 30) _hrWindow30s.removeAt(0);
   }
 
-  /// =========================
-  /// ✅ AUTO THRESHOLD STATE
-  /// =========================
-  final List<double> _hrWindow30s = [];
-  DateTime? _lastThresholdUpdate;
-
-  double sensitivity = 3.0; // now auto-controlled (1..5)
-
-  void setSensitivity(double value) {
-    // kept for compatibility / debug, UI removed
-    sensitivity = value;
-    notifyListeners();
-  }
-
-  FeedbackMode feedbackMode = FeedbackMode.haptic;
-  void setFeedbackMode(FeedbackMode m) {
-    feedbackMode = m;
-    notifyListeners();
-  }
-
-  /// ✅ NEW: Vibration ON/OFF switch (does not change optimiser logic)
   bool hapticsEnabled = true;
   void setHapticsEnabled(bool v) {
     hapticsEnabled = v;
     notifyListeners();
-  }
-
-  void _log(String event, String details) => LogBuffer.add(event, details);
-
-  Future<bool> _canVibrate() async => await Vibration.hasVibrator() ?? false;
-
-  Future<void> _signalUp() async {
-    if (!hapticsEnabled) return; // ✅ NEW: gate haptics
-    if (await _canVibrate()) Vibration.vibrate(duration: 120);
-  }
-
-  Future<void> _signalDown() async {
-    if (!hapticsEnabled) return; // ✅ NEW: gate haptics
-    if (await _canVibrate()) Vibration.vibrate(duration: 300);
   }
 
   Timer? _loopTimer;
@@ -196,21 +116,13 @@ class OptimiserState extends ChangeNotifier {
       _reset();
       _startLoop();
       _advice = "Learning cadence...";
-      _log("START", "recording started");
+      LogBuffer.add("START", "recording started");
     } else {
       _stopLoop();
       _advice = "Tap ▶ to start workout";
-      _log("STOP", "recording stopped");
+      LogBuffer.add("STOP", "recording stopped");
     }
     notifyListeners();
-  }
-
-  /// ✅ NEW: called on lifecycle resume to ensure loop restarts if OS paused timers
-  void ensureLoopRunning() {
-    if (recording && _loopTimer == null) {
-      _startLoop();
-      _log("RECOVER", "loop restarted on resume");
-    }
   }
 
   void _reset() {
@@ -221,18 +133,12 @@ class OptimiserState extends ChangeNotifier {
     _testStartTime = null;
     _direction = null;
     _hrBeforeTest = null;
-
-    // clear auto-threshold window
-    _hrWindow30s.clear();
-    _lastThresholdUpdate = null;
-
-    // optional: reset to middle
-    sensitivity = 3.0;
   }
 
   void _startLoop() {
     _loopTimer?.cancel();
-    _loopTimer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+    _loopTimer =
+        Timer.periodic(const Duration(seconds: 1), (_) => _tick());
   }
 
   void _stopLoop() {
@@ -247,61 +153,27 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// =============================================================
-  /// ✅ AUTO THRESHOLD UPDATE (range-based, 30s window, every ~10s, ±1 step)
-  /// =============================================================
-  void _updateAutoThreshold() {
-    final now = DateTime.now();
-
-    if (_lastThresholdUpdate != null &&
-        now.difference(_lastThresholdUpdate!).inSeconds < 10) {
-      return;
-    }
-    _lastThresholdUpdate = now;
-
-    // need enough samples to be meaningful
-    if (_hrWindow30s.length < 10) return;
-
-    final minHr = _hrWindow30s.reduce((a, b) => a < b ? a : b);
-    final maxHr = _hrWindow30s.reduce((a, b) => a > b ? a : b);
-    final range = maxHr - minHr;
-
-    int target;
-    if (range <= 2) {
-      target = 1;
-    } else if (range <= 4) {
-      target = 2;
-    } else if (range <= 6) {
-      target = 3;
-    } else if (range <= 8) {
-      target = 4;
-    } else {
-      target = 5;
-    }
-
-    final old = sensitivity.round();
-
-    // rate limit: ±1 step per update
-    int next = old;
-    if (target > old) next = old + 1;
-    if (target < old) next = old - 1;
-
-    if (next != old) {
-      sensitivity = next.toDouble();
-      _log("AUTO_THR", "range=${range.toStringAsFixed(1)} old=$old new=$next");
+  Future<void> _signalUp() async {
+    if (!hapticsEnabled) return;
+    if (await Vibration.hasVibrator() ?? false) {
+      Vibration.vibrate(duration: 120);
     }
   }
 
-  /// =============================================================
-  /// Main optimiser loop (UNCHANGED logic; auto-threshold call added only)
-  /// =============================================================
+  Future<void> _signalDown() async {
+    if (!hapticsEnabled) return;
+    if (await Vibration.hasVibrator() ?? false) {
+      Vibration.vibrate(duration: 300);
+    }
+  }
+
   void _tick() {
     if (!recording || hr <= 0) return;
 
-    // auto-threshold update (only changes thr value)
-    _updateAutoThreshold();
-
-    _log("TICK", "hr=$hr testInProg=$_testInProgress plateau=$_plateau");
+    LogBuffer.add(
+      "TICK",
+      "hr=$hr testInProg=$_testInProgress plateau=$_plateau",
+    );
 
     final now = DateTime.now();
     const interval = 15;
@@ -337,10 +209,9 @@ class OptimiserState extends ChangeNotifier {
     _direction = dir;
     _testStartTime = DateTime.now();
     _lastTestTime = _testStartTime;
-
     _hrBeforeTest = hr;
 
-    _log("TEST_START", "dir=$dir hrBefore=$_hrBeforeTest");
+    LogBuffer.add("TEST_START", "dir=$dir hrBefore=$_hrBeforeTest");
 
     if (dir == "up") {
       _advice = "Increase cadence";
@@ -355,34 +226,27 @@ class OptimiserState extends ChangeNotifier {
 
   void _evaluateTest() {
     _testInProgress = false;
-
     if (_hrBeforeTest == null) return;
 
     final delta = hr - _hrBeforeTest!;
-    final thr = sensitivity;
+    LogBuffer.add("EVAL", "delta=$delta thr=$sensitivity");
 
-    _log("EVAL", "dir=$_direction before=$_hrBeforeTest now=$hr delta=$delta");
-
-    if (delta.abs() < thr) {
+    if (delta.abs() < sensitivity) {
       _plateau = true;
       _plateauHr = hr;
       _advice = "Optimal cadence";
-      _log("PLATEAU", "hr=$hr thresh=$thr");
+      LogBuffer.add("PLATEAU", "hr=$hr");
       notifyListeners();
       return;
     }
 
-    if (delta < -thr) {
-      _log("GOOD", "dir=$_direction delta=$delta");
+    if (delta < -sensitivity) {
       _advice = _direction == "up"
           ? "Good response. Slightly higher cadence is efficient."
           : "Good response. Slightly easier cadence is efficient.";
-    } else if (delta > thr) {
+    } else if (delta > sensitivity) {
       final old = _direction;
       _direction = old == "up" ? "down" : "up";
-
-      _log("BAD_FLIP", "old=$old new=$_direction delta=$delta");
-
       _advice = old == "up"
           ? "Too costly. Next I'll ease cadence."
           : "Too easy. Next I'll increase cadence.";
@@ -391,7 +255,8 @@ class OptimiserState extends ChangeNotifier {
     notifyListeners();
   }
 
-  String get rhythmAdvice => recording ? _advice : "Tap ▶ to start workout";
+  String get rhythmAdvice =>
+      recording ? _advice : "Tap ▶ to start workout";
 
   Color get rhythmColor {
     if (!recording) return Colors.grey;
@@ -408,12 +273,13 @@ class OptimiserState extends ChangeNotifier {
 }
 
 /// =============================================================
-/// BLE MANAGER (AUTO-RECONNECT ADDED, UI + scan unchanged)
+/// BLE MANAGER
 /// =============================================================
 class BleManager extends ChangeNotifier {
   final FlutterReactiveBle _ble = FlutterReactiveBle();
 
-  final Uuid hrService = Uuid.parse("0000180D-0000-1000-8000-00805F9B34FB");
+  final Uuid hrService =
+      Uuid.parse("0000180D-0000-1000-8000-00805F9B34FB");
   final Uuid hrMeasurement =
       Uuid.parse("00002A37-0000-1000-8000-00805F9B34FB");
 
@@ -424,13 +290,6 @@ class BleManager extends ChangeNotifier {
   String? connectedId;
   String? connectedName;
   bool scanning = false;
-
-  /// ✅ NEW: remember last device so we can reconnect even if iOS drops connection
-  String? _lastDeviceId;
-  String? _lastDeviceName;
-
-  /// ✅ NEW: prevent spam reconnect attempts
-  DateTime? _lastReconnectAttempt;
 
   Future<void> ensurePermissions() async {
     await Permission.bluetoothScan.request();
@@ -481,10 +340,6 @@ class BleManager extends ChangeNotifier {
     _connSub?.cancel();
     _hrSub?.cancel();
 
-    // ✅ NEW: remember last device for auto-reconnect
-    _lastDeviceId = id;
-    _lastDeviceName = name;
-
     _connSub = _ble.connectToDevice(id: id).listen((event) {
       if (event.connectionState == DeviceConnectionState.connected) {
         connectedId = id;
@@ -501,33 +356,13 @@ class BleManager extends ChangeNotifier {
           final bpm = _parseHr(data);
           if (bpm > 0) opt.setHr(bpm.toDouble());
         });
-      } else if (event.connectionState == DeviceConnectionState.disconnected) {
+      } else if (event.connectionState ==
+          DeviceConnectionState.disconnected) {
         connectedId = null;
         connectedName = null;
         notifyListeners();
       }
     });
-  }
-
-  /// ✅ NEW: called on lifecycle resume to reconnect automatically
-  void ensureReconnected(OptimiserState opt) {
-    final now = DateTime.now();
-
-    // if already connected, do nothing
-    if (connectedId != null) return;
-
-    // if we don't know what to reconnect to, do nothing
-    if (_lastDeviceId == null) return;
-
-    // rate limit reconnect attempts
-    if (_lastReconnectAttempt != null &&
-        now.difference(_lastReconnectAttempt!).inSeconds < 3) {
-      return;
-    }
-    _lastReconnectAttempt = now;
-
-    LogBuffer.add("BLE", "auto reconnect attempt to $_lastDeviceName");
-    connect(_lastDeviceId!, _lastDeviceName ?? "", opt);
   }
 
   Future<void> disconnect() async {
@@ -540,7 +375,7 @@ class BleManager extends ChangeNotifier {
 }
 
 /// =============================================================
-/// MAIN DASHBOARD (Sensitivity dropdown removed already, Haptic dropdown removed now)
+/// DASHBOARD UI
 /// =============================================================
 class OptimiserDashboard extends StatelessWidget {
   const OptimiserDashboard({super.key});
@@ -554,7 +389,9 @@ class OptimiserDashboard extends StatelessWidget {
       appBar: AppBar(
         leading: IconButton(
           icon: Icon(
-            ble.connectedId == null ? Icons.bluetooth : Icons.bluetooth_connected,
+            ble.connectedId == null
+                ? Icons.bluetooth
+                : Icons.bluetooth_connected,
           ),
           onPressed: () => _openBleSheet(context),
         ),
@@ -562,12 +399,11 @@ class OptimiserDashboard extends StatelessWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.list_alt),
-            tooltip: "View logs",
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const LogViewerPage()),
             ),
-          )
+          ),
         ],
       ),
       body: Column(
@@ -584,27 +420,21 @@ class OptimiserDashboard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text("HR: ${opt.hr.toStringAsFixed(0)} bpm"),
-
-          /// ✅ NEW: Vibration ON/OFF switch (replaces dropdown request)
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Text("Vibration cues: "),
               Switch(
                 value: opt.hapticsEnabled,
-                onChanged: (v) => opt.setHapticsEnabled(v),
+                onChanged: opt.setHapticsEnabled,
               ),
             ],
           ),
-
           const SizedBox(height: 10),
           SizedBox(height: 200, child: HrGraph(opt: opt)),
-          const SizedBox(height: 10),
           if (ble.connectedName != null)
-            Text(
-              "Connected to: ${ble.connectedName}",
-              style: const TextStyle(color: Colors.black54),
-            ),
+            Text("Connected to: ${ble.connectedName}",
+                style: const TextStyle(color: Colors.black54)),
         ],
       ),
       floatingActionButton: FloatingActionButton(
@@ -628,7 +458,7 @@ class OptimiserDashboard extends StatelessWidget {
 }
 
 /// =============================================================
-/// RAW LOG VIEWER (+ SAVE BUTTON)
+/// LOG VIEWER
 /// =============================================================
 class LogViewerPage extends StatelessWidget {
   const LogViewerPage({super.key});
@@ -643,20 +473,15 @@ class LogViewerPage extends StatelessWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.save_alt),
-            tooltip: "Save logs",
             onPressed: () async {
               final file = await LogBuffer.saveToFile();
               if (file != null) {
-                await Share.shareXFiles(
-                  [XFile(file.path)],
-                  text: "ItKnows session log",
-                );
+                await Share.shareXFiles([XFile(file.path)]);
               }
             },
           ),
           IconButton(
             icon: const Icon(Icons.delete),
-            tooltip: "Clear logs",
             onPressed: () {
               LogBuffer.clear();
               Navigator.pop(context);
@@ -676,10 +501,11 @@ class LogViewerPage extends StatelessWidget {
 }
 
 /// =============================================================
-/// BLE DEVICE PICKER (UNCHANGED)
+/// BLE DEVICE PICKER
 /// =============================================================
 class _BleBottomSheet extends StatefulWidget {
   const _BleBottomSheet();
+
   @override
   State<_BleBottomSheet> createState() => _BleBottomSheetState();
 }
@@ -711,7 +537,8 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
           children: [
             Text(
               ble.scanning ? "Scanning…" : "Bluetooth Devices",
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              style:
+                  const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
             Flexible(
@@ -724,13 +551,15 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
                       itemCount: devices.length,
                       itemBuilder: (_, i) {
                         final d = devices[i];
-                        final name = d.name.isNotEmpty ? d.name : "(unknown)";
+                        final name =
+                            d.name.isNotEmpty ? d.name : "(unknown)";
                         return ListTile(
                           leading: const Icon(Icons.watch),
                           title: Text(name),
                           subtitle: Text(d.id),
                           onTap: () async {
-                            final opt = context.read<OptimiserState>();
+                            final opt =
+                                context.read<OptimiserState>();
                             await ble.connect(d.id, name, opt);
                             if (mounted) Navigator.pop(context);
                           },
@@ -750,7 +579,7 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
 }
 
 /// =============================================================
-/// HR GRAPH (UNCHANGED)
+/// HR GRAPH
 /// =============================================================
 class HrGraph extends StatelessWidget {
   final OptimiserState opt;
@@ -778,7 +607,8 @@ class HrGraph extends StatelessWidget {
       maxY = maxVal + 5;
     }
 
-    final maxX = points.isEmpty ? 1.0 : (points.length - 1).toDouble();
+    final maxX =
+        points.isEmpty ? 1.0 : (points.length - 1).toDouble();
 
     return LineChart(
       LineChartData(
