@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -7,36 +6,7 @@ import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:vibration/vibration.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
-
-/// =============================================================
-/// SIMPLE IN-MEMORY LOG BUFFER (+ SAVE TO FILE)
-/// =============================================================
-class LogBuffer {
-  static final List<String> _lines = [];
-
-  static void add(String event, String details) {
-    final ts = DateTime.now().toIso8601String();
-    _lines.add("$ts | $event | $details");
-    print("$ts | $event | $details");
-  }
-
-  static String get all =>
-      _lines.isEmpty ? "No logs yet." : _lines.join("\n");
-
-  static void clear() => _lines.clear();
-
-  static Future<File?> saveToFile() async {
-    if (_lines.isEmpty) return null;
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File(
-      "${dir.path}/itknows_log_${DateTime.now().millisecondsSinceEpoch}.txt",
-    );
-    await file.writeAsString(all);
-    return file;
-  }
-}
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 /// =============================================================
 /// ENTRY POINT
@@ -58,7 +28,7 @@ void main() {
 }
 
 /// =============================================================
-/// APP ROOT (NO LIFECYCLE OBSERVER)
+/// APP ROOT
 /// =============================================================
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -116,11 +86,9 @@ class OptimiserState extends ChangeNotifier {
       _reset();
       _startLoop();
       _advice = "Learning cadence...";
-      LogBuffer.add("START", "recording started");
     } else {
       _stopLoop();
       _advice = "Tap ▶ to start workout";
-      LogBuffer.add("STOP", "recording stopped");
     }
     notifyListeners();
   }
@@ -170,11 +138,6 @@ class OptimiserState extends ChangeNotifier {
   void _tick() {
     if (!recording || hr <= 0) return;
 
-    LogBuffer.add(
-      "TICK",
-      "hr=$hr testInProg=$_testInProgress plateau=$_plateau",
-    );
-
     final now = DateTime.now();
     const interval = 15;
     const delay = 15;
@@ -211,8 +174,6 @@ class OptimiserState extends ChangeNotifier {
     _lastTestTime = _testStartTime;
     _hrBeforeTest = hr;
 
-    LogBuffer.add("TEST_START", "dir=$dir hrBefore=$_hrBeforeTest");
-
     if (dir == "up") {
       _advice = "Increase cadence";
       _signalUp();
@@ -229,13 +190,11 @@ class OptimiserState extends ChangeNotifier {
     if (_hrBeforeTest == null) return;
 
     final delta = hr - _hrBeforeTest!;
-    LogBuffer.add("EVAL", "delta=$delta thr=$sensitivity");
 
     if (delta.abs() < sensitivity) {
       _plateau = true;
       _plateauHr = hr;
       _advice = "Optimal cadence";
-      LogBuffer.add("PLATEAU", "hr=$hr");
       notifyListeners();
       return;
     }
@@ -375,10 +334,27 @@ class BleManager extends ChangeNotifier {
 }
 
 /// =============================================================
-/// DASHBOARD UI
+/// DASHBOARD UI (SCREEN ALWAYS ON)
 /// =============================================================
-class OptimiserDashboard extends StatelessWidget {
+class OptimiserDashboard extends StatefulWidget {
   const OptimiserDashboard({super.key});
+
+  @override
+  State<OptimiserDashboard> createState() => _OptimiserDashboardState();
+}
+
+class _OptimiserDashboardState extends State<OptimiserDashboard> {
+  @override
+  void initState() {
+    super.initState();
+    WakelockPlus.enable();
+  }
+
+  @override
+  void dispose() {
+    WakelockPlus.disable();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -396,15 +372,6 @@ class OptimiserDashboard extends StatelessWidget {
           onPressed: () => _openBleSheet(context),
         ),
         title: const Text("Physiological Optimiser"),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.list_alt),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const LogViewerPage()),
-            ),
-          ),
-        ],
       ),
       body: Column(
         children: [
@@ -419,7 +386,6 @@ class OptimiserDashboard extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 10),
-          Text("HR: ${opt.hr.toStringAsFixed(0)} bpm"),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -452,49 +418,6 @@ class OptimiserDashboard extends StatelessWidget {
       builder: (_) => ChangeNotifierProvider.value(
         value: ble,
         child: const _BleBottomSheet(),
-      ),
-    );
-  }
-}
-
-/// =============================================================
-/// LOG VIEWER
-/// =============================================================
-class LogViewerPage extends StatelessWidget {
-  const LogViewerPage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final text = LogBuffer.all;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Session Logs"),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.save_alt),
-            onPressed: () async {
-              final file = await LogBuffer.saveToFile();
-              if (file != null) {
-                await Share.shareXFiles([XFile(file.path)]);
-              }
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete),
-            onPressed: () {
-              LogBuffer.clear();
-              Navigator.pop(context);
-            },
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Text(
-          text,
-          style: const TextStyle(fontFamily: "monospace", fontSize: 12),
-        ),
       ),
     );
   }
@@ -579,7 +502,7 @@ class _BleBottomSheetState extends State<_BleBottomSheet> {
 }
 
 /// =============================================================
-/// HR GRAPH
+/// HR GRAPH (GREEN ONLY)
 /// =============================================================
 class HrGraph extends StatelessWidget {
   final OptimiserState opt;
